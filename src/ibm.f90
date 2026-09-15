@@ -177,7 +177,7 @@ module mod_ibm
         real(rp),intent(in),optional                :: hmap(0:,0:)
         integer,intent(in),optional                 :: n1_hmap,n2_hmap
         real(rp),intent(in),optional                :: l1_hmap,l2_hmap
-        real(rp),intent(in),dimension(0:),optional  :: zc,zf           
+        real(rp),intent(in),dimension(0:),optional  :: zc,zf
 
         do k = lbound(mask_id,3),ubound(mask_id,3)
             do j = lbound(mask_id,2),ubound(mask_id,2)
@@ -200,7 +200,7 @@ module mod_ibm
                     if(isInbody(ibm_direction,amp_l,n_wave,l_0,phase_l,x,y,z,n,l,&
                                 hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap).eqv..true.)then
                         mask_id(i,j,k) = .true. ! this means we are in the solid
-                    endif                    
+                    endif
                 end do 
             end do 
         end do

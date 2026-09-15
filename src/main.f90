@@ -509,7 +509,7 @@ program cans
     mask_s = .false.
   endif
   !
-  if(ibm_2nd)then
+  if(is_ibm)then
     allocate(lap_u(0:n(1)+1,0:n(2)+1,0:n(3)+1))
     allocate(lap_v(0:n(1)+1,0:n(2)+1,0:n(3)+1))
     allocate(lap_w(0:n(1)+1,0:n(2)+1,0:n(3)+1))
@@ -564,7 +564,7 @@ program cans
     !$acc enter data copyin(mask_u,mask_v,mask_w,mask_s)
 #endif
   endif
-  if(is_ibm.and.ibm_2nd)then
+  if(is_ibm)then
     print*, "***2nd Order IBM coefficients are deploying***"
     call set_ibm_2nd(lo,mask_u,lap_u,1,0,0&
         ,n,l,dl,ibm_direction,amp_l,n_wave,l_0,phase_l,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,zc,zf,dzc,dzf,use_hmap,band_u)
@@ -574,6 +574,8 @@ program cans
         ,n,l,dl,ibm_direction,amp_l,n_wave,l_0,phase_l,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,zc,zf,dzc,dzf,use_hmap,band_w)
     call set_ibm_2nd(lo,mask_s,lap_s,0,0,0,n,l,dl,ibm_direction,amp_l,n_wave,l_0,phase_l,&
                             hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,zc,zf,dzc,dzf,use_hmap,band_s)
+  endif
+  if(is_ibm)then
     allocate(fri_u(count(band_u(1:n(1),1:n(2),1:n(3))),12))! we do this way so we exlude ghost cells and only focus on the inner cells
     allocate(fri_v(count(band_v(1:n(1),1:n(2),1:n(3))),12))! init the local arrays
     allocate(fri_w(count(band_w(1:n(1),1:n(2),1:n(3))),12))
@@ -640,7 +642,7 @@ program cans
   if(iout1d > 0.and.mod(istep,max(iout1d,1)) == 0) then
     include 'out1d.h90'
     call out1d_chan(trim(datadir)//'turb_stats_'//fldnum//'.out',ng,lo,hi,3,l,dl,zc_g,u,v,w)
-    if(is_ibm.and.ibm_2nd)then
+    if(is_ibm)then
       call calc_shear_st(fri_u,u)
       call calc_shear_st(fri_v,v)
       call calc_shear_st(fri_w,w)
@@ -855,14 +857,14 @@ program cans
     if(iout1d > 0.and.mod(istep,max(iout1d,1)) == 0) then
       !$acc wait
       !$acc update self(u,v,w,p)
-      if(is_ibm.and.ibm_2nd)then
+      if(is_ibm)then
         !$acc update self(mom_saveu,mom_savev,mom_savew)
       endif
       do iscal=1,nscal
         !$acc update self(scalars(iscal)%val)
       end do
       call out1d_chan(trim(datadir)//'turb_stats_'//fldnum//'.out',ng,lo,hi,3,l,dl,zc_g,u,v,w)
-      if(is_ibm.and.ibm_2nd)then
+      if(is_ibm)then
         call calc_shear_st(fri_u,u)
         call calc_shear_st(fri_v,v)
         call calc_shear_st(fri_w,w)
@@ -899,7 +901,7 @@ program cans
         !this is for the fricition calculation w/ FVM
       endif
     endif
-    if(is_ibm.and.ibm_2nd)then
+    if(is_ibm)then
       if(iout1d > 0.and.mod(istep+1,max(iout1d,1)) == 0) then
         ! we need the old momentum
         call save_mom(u,band_u,mom_saveu)
