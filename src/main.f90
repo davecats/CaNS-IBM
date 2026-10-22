@@ -81,7 +81,7 @@ program cans
                                  amp_l,            &
                                  phase_l,          &
                                  bulk_vel_def,     &
-                                 ibm_proj,         &
+                                 ibm_proj,ibm_iout_wall, &
                                  ibm_hch,          &
                                  use_hmap,         &
                                  override_grid,     &
@@ -141,6 +141,7 @@ program cans
   real(rp) :: dt,dti,dt_cfl,time,dtrk,dtrki,divtot,divmax
   real(rp) :: velmax_solid(3),divtot_m,divmax_m,ubulk_fl
   logical  :: is_ibm_force,is_ibm_map
+  integer  :: iout_wall ! interval of the per-point IB wall outputs
   character(len=6) :: impart
   real(rp), allocatable, dimension(:,:,:) :: imp_map ! column-integrated IB force (x,y) of the lower wall
   real(rp) :: imp_ibm(2,2,3),imp_leak(2,2,3),pi_drive(3) ! IB force: (lower/upper half, fluid/solid, component)
@@ -688,44 +689,46 @@ program cans
     !$acc update self(scalars(iscal)%val)
   end do
   ! write the inital condition
+  iout_wall = merge(iout1d,ibm_iout_wall,ibm_iout_wall < 0)
   if(iout1d > 0.and.mod(istep,max(iout1d,1)) == 0) then
     include 'out1d.h90'
     call out1d_chan(trim(datadir)//'turb_stats_'//fldnum//'.out',ng,lo,hi,3,l,dl,zc_g,u,v,w)
-    if(is_ibm)then
+    if(is_ibm) &
       call out1d_chan_ibm(trim(datadir)//'turb_stats_ibm_'//fldnum//'.out',ng,lo,hi,l,dl,zc_g,u,v,w, &
                           mask_u,mask_v,mask_w,mask_s)
-      call calc_shear_st(fri_u,u,visc)
-      call calc_shear_st(fri_v,v,visc)
-      call calc_shear_st(fri_w,w,visc)
-      call get_wall_pres(p,p_grad,lo,dl,zc,zf,mask_s,band_s)
-      if(myid==0)then
-        globu=>fri_u_g
-        globv=>fri_v_g
-        globw=>fri_w_g
-        globp=>p_grad_g
-      else
-        globu=>dum_g
-        globv=>dum_g
-        globw=>dum_g
-        globp=>dum_g
-      endif
-      !$acc update self(fri_u,fri_v,fri_w,p_grad)
-      do ibm_i=1,12
-        call MPI_GATHERV(fri_u(:,ibm_i)+ibm_idx_off(ibm_i),&
-                         size_u,MPI_REAL_RP,globu(:,ibm_i),fri_u_ga,displ_u,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-        call MPI_GATHERV(fri_v(:,ibm_i)+ibm_idx_off(ibm_i),&
-                         size_v,MPI_REAL_RP,globv(:,ibm_i),fri_v_ga,displ_v,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-        call MPI_GATHERV(fri_w(:,ibm_i)+ibm_idx_off(ibm_i),&
-                         size_w,MPI_REAL_RP,globw(:,ibm_i),fri_w_ga,displ_w,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-        call MPI_GATHERV(p_grad(:,ibm_i)+ibm_idx_off(ibm_i),&
-                         size_s,MPI_REAL_RP,globp(:,ibm_i),sca_ga,displ_s,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-      end do
-      if(myid==0)then
-        call write_data(trim(datadir)//"fric-u_"//fldnum//".out",myid,fri_u_g)
-        call write_data(trim(datadir)//"fric-v_"//fldnum//".out",myid,fri_v_g)
-        call write_data(trim(datadir)//"fric-w_"//fldnum//".out",myid,fri_w_g)
-        call write_data(trim(datadir)//"pressure"//fldnum//".out",myid,p_grad_g)
-      endif
+  end if
+  if(is_ibm.and.iout_wall > 0.and.mod(istep,max(iout_wall,1)) == 0) then
+    call calc_shear_st(fri_u,u,visc)
+    call calc_shear_st(fri_v,v,visc)
+    call calc_shear_st(fri_w,w,visc)
+    call get_wall_pres(p,p_grad,lo,dl,zc,zf,mask_s,band_s)
+    if(myid==0)then
+      globu=>fri_u_g
+      globv=>fri_v_g
+      globw=>fri_w_g
+      globp=>p_grad_g
+    else
+      globu=>dum_g
+      globv=>dum_g
+      globw=>dum_g
+      globp=>dum_g
+    endif
+    !$acc update self(fri_u,fri_v,fri_w,p_grad)
+    do ibm_i=1,12
+      call MPI_GATHERV(fri_u(:,ibm_i)+ibm_idx_off(ibm_i),&
+                       size_u,MPI_REAL_RP,globu(:,ibm_i),fri_u_ga,displ_u,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+      call MPI_GATHERV(fri_v(:,ibm_i)+ibm_idx_off(ibm_i),&
+                       size_v,MPI_REAL_RP,globv(:,ibm_i),fri_v_ga,displ_v,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+      call MPI_GATHERV(fri_w(:,ibm_i)+ibm_idx_off(ibm_i),&
+                       size_w,MPI_REAL_RP,globw(:,ibm_i),fri_w_ga,displ_w,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+      call MPI_GATHERV(p_grad(:,ibm_i)+ibm_idx_off(ibm_i),&
+                       size_s,MPI_REAL_RP,globp(:,ibm_i),sca_ga,displ_s,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+    end do
+    if(myid==0)then
+      call write_data(trim(datadir)//"fric-u_"//fldnum//".out",myid,fri_u_g)
+      call write_data(trim(datadir)//"fric-v_"//fldnum//".out",myid,fri_v_g)
+      call write_data(trim(datadir)//"fric-w_"//fldnum//".out",myid,fri_w_g)
+      call write_data(trim(datadir)//"pressure"//fldnum//".out",myid,p_grad_g)
     endif
   end if
   if(iout2d > 0.and.mod(istep,max(iout2d,1)) == 0) then
@@ -751,7 +754,7 @@ program cans
     tauxo(:,:) = 0.; tauyo(:,:) = 0.; tauzo(:,:) = 0.
     dpdl(:)     = 0.
     fs(1:nscal) = 0.
-    is_ibm_map   = is_ibm.and.iout1d > 0.and.mod(istep,max(iout1d,1)) == 0
+    is_ibm_map   = is_ibm.and.iout_wall > 0.and.mod(istep,max(iout_wall,1)) == 0
     is_ibm_force = is_ibm.and.iout0d > 0.and.mod(istep,max(iout0d,1)) == 0
     is_ibm_force = is_ibm_force.or.is_ibm_map
     if(is_ibm_force) then
@@ -1086,49 +1089,53 @@ program cans
         !$acc update self(scalars(iscal)%val)
       end do
       call out1d_chan(trim(datadir)//'turb_stats_'//fldnum//'.out',ng,lo,hi,3,l,dl,zc_g,u,v,w)
-      if(is_ibm)then
+      if(is_ibm) &
         call out1d_chan_ibm(trim(datadir)//'turb_stats_ibm_'//fldnum//'.out',ng,lo,hi,l,dl,zc_g,u,v,w, &
                             mask_u,mask_v,mask_w,mask_s)
-        call calc_shear_st(fri_u,u,visc)
-        call calc_shear_st(fri_v,v,visc)
-        call calc_shear_st(fri_w,w,visc)
-        call get_wall_pres(p,p_grad,lo,dl,zc,zf,mask_s,band_s)
-        if(myid==0)then
-          globu=>fri_u_g
-          globv=>fri_v_g
-          globw=>fri_w_g
-          globp=>p_grad_g
-        else
-          globu=>dum_g
-          globv=>dum_g
-          globw=>dum_g
-          globp=>dum_g
-        endif
-        !$acc update self(fri_u,fri_v,fri_w,p_grad)
-        do ibm_i=1,12
-          call MPI_GATHERV(fri_u(:,ibm_i)+ibm_idx_off(ibm_i),&
-                           size_u,MPI_REAL_RP,globu(:,ibm_i),fri_u_ga,displ_u,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-          call MPI_GATHERV(fri_v(:,ibm_i)+ibm_idx_off(ibm_i),&
-                           size_v,MPI_REAL_RP,globv(:,ibm_i),fri_v_ga,displ_v,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-          call MPI_GATHERV(fri_w(:,ibm_i)+ibm_idx_off(ibm_i),&
-                           size_w,MPI_REAL_RP,globw(:,ibm_i),fri_w_ga,displ_w,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-          call MPI_GATHERV(p_grad(:,ibm_i)+ibm_idx_off(ibm_i),&
-                           size_s,MPI_REAL_RP,globp(:,ibm_i),sca_ga,displ_s,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-        end do
-        if(myid==0)then
-          call write_data(trim(datadir)//"fric-u_"//fldnum//".out",myid,fri_u_g)
-          call write_data(trim(datadir)//"fric-v_"//fldnum//".out",myid,fri_v_g)
-          call write_data(trim(datadir)//"fric-w_"//fldnum//".out",myid,fri_w_g)
-          call write_data(trim(datadir)//"pressure"//fldnum//".out",myid,p_grad_g)
-        endif
-        !FV method for calculating the wall friction 
-        call calc_wall_force(n,lo,l,dti,pi_drive,mask_s,frifv,frifvout) ! exact wall force per cell of this step
-        call writeFVfric(trim(datadir)//'FV-fric_'//trim(mpiranknum)//'_s_'//fldnum//'.out',frifvout)
-        ! wall stress map of the lower wall from the exact IB force of this time step
-        if(ibm_direction(0,3)) &
-          call out_ibm_wall_stress(trim(datadir)//'ibm_wall_stress_'//fldnum//'.out',n,lo,ng,l,dl,pi_drive,imp_map)
-        !this is for the fricition calculation w/ FVM
+    endif
+    ! per-point IB wall outputs (every iout_wall steps)
+    if(is_ibm_map) then
+      !$acc wait
+      !$acc update self(u,v,w,p)
+      call calc_shear_st(fri_u,u,visc)
+      call calc_shear_st(fri_v,v,visc)
+      call calc_shear_st(fri_w,w,visc)
+      call get_wall_pres(p,p_grad,lo,dl,zc,zf,mask_s,band_s)
+      if(myid==0)then
+        globu=>fri_u_g
+        globv=>fri_v_g
+        globw=>fri_w_g
+        globp=>p_grad_g
+      else
+        globu=>dum_g
+        globv=>dum_g
+        globw=>dum_g
+        globp=>dum_g
       endif
+      !$acc update self(fri_u,fri_v,fri_w,p_grad)
+      do ibm_i=1,12
+        call MPI_GATHERV(fri_u(:,ibm_i)+ibm_idx_off(ibm_i),&
+                         size_u,MPI_REAL_RP,globu(:,ibm_i),fri_u_ga,displ_u,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+        call MPI_GATHERV(fri_v(:,ibm_i)+ibm_idx_off(ibm_i),&
+                         size_v,MPI_REAL_RP,globv(:,ibm_i),fri_v_ga,displ_v,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+        call MPI_GATHERV(fri_w(:,ibm_i)+ibm_idx_off(ibm_i),&
+                         size_w,MPI_REAL_RP,globw(:,ibm_i),fri_w_ga,displ_w,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+        call MPI_GATHERV(p_grad(:,ibm_i)+ibm_idx_off(ibm_i),&
+                         size_s,MPI_REAL_RP,globp(:,ibm_i),sca_ga,displ_s,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+      end do
+      if(myid==0)then
+        call write_data(trim(datadir)//"fric-u_"//fldnum//".out",myid,fri_u_g)
+        call write_data(trim(datadir)//"fric-v_"//fldnum//".out",myid,fri_v_g)
+        call write_data(trim(datadir)//"fric-w_"//fldnum//".out",myid,fri_w_g)
+        call write_data(trim(datadir)//"pressure"//fldnum//".out",myid,p_grad_g)
+      endif
+      !FV method for calculating the wall friction 
+      call calc_wall_force(n,lo,l,dti,pi_drive,mask_s,frifv,frifvout) ! exact wall force per cell of this step
+      call writeFVfric(trim(datadir)//'FV-fric_'//trim(mpiranknum)//'_s_'//fldnum//'.out',frifvout)
+      ! wall stress map of the lower wall from the exact IB force of this time step
+      if(ibm_direction(0,3)) &
+        call out_ibm_wall_stress(trim(datadir)//'ibm_wall_stress_'//fldnum//'.out',n,lo,ng,l,dl,pi_drive,imp_map)
+      !this is for the fricition calculation w/ FVM
     endif
     !
     if(iout1d > 0.and.mod(istep,max(iout1d,1)) == 0) then
