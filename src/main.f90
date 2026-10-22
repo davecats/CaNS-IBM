@@ -1134,7 +1134,7 @@ program cans
     end if
   end do
   !***//calc-mean-flow\\***!
-  if(do_richardson)then
+  if(do_richardson .and. is_ibm)then ! fluid-only means; the masks exist only with is_ibm
     !call calc_mean_flow_easy(mask_u,u,mean_u,n,dl,1)
     !call calc_mean_flow_easy(mask_v,v,mean_v,n,dl,2)
     !call calc_mean_flow_easy(mask_w,w,mean_w,n,dl,3)
