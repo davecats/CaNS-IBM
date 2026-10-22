@@ -141,7 +141,7 @@ program cans
   real(rp) :: dt,dti,dt_cfl,time,dtrk,dtrki,divtot,divmax
   real(rp) :: velmax_solid(3),divtot_m,divmax_m,ubulk_fl
   logical  :: is_ibm_force,is_ibm_map
-  integer  :: iout_wall ! interval of the per-point IB wall outputs
+  integer  :: iout_wall = 0 ! interval of the per-point IB wall outputs
   character(len=6) :: impart
   real(rp), allocatable, dimension(:,:,:) :: imp_map ! column-integrated IB force (x,y) of the lower wall
   real(rp) :: imp_ibm(2,2,3),imp_leak(2,2,3),pi_drive(3) ! IB force: (lower/upper half, fluid/solid, component)
@@ -627,23 +627,26 @@ program cans
     endif
     
 
-    call calc_grad_dist(fri_u,lo,ibm_direction,amp_l,n_wave,l_0,phase_l,n,l,dl,zc,zf,&
-                                band_u,1,0,0,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,dzf,dzc)
-    call calc_grad_dist(fri_v,lo,ibm_direction,amp_l,n_wave,l_0,phase_l,n,l,dl,zc,zf,&
-                                band_v,0,1,0,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,dzf,dzc)
-    call calc_grad_dist(fri_w,lo,ibm_direction,amp_l,n_wave,l_0,phase_l,n,l,dl,zc,zf,&
-                                band_w,0,0,1,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,dzf,dzc)
-    call calc_grad_dist(p_grad,lo,ibm_direction,amp_l,n_wave,l_0,phase_l,n,l,dl,zc,zf,&
-                                band_s,0,0,0,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,dzf,dzc)                    
-    !
-    call init_wall_force(n,lo,l,dl,zc,zf,dzc,dzf,mask_u,mask_v,mask_w,mask_s,ibm_direction,amp_l,n_wave,l_0,phase_l, &
-                         hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha)
-    allocate(frifv(0:n(1),0:n(2),0:n(3),19))
-    call init_fric_cubes(wf_cell,mask_s,lo,dl,zc,zf,dzc,&
-                                        dzf,xf_g,yc_g,0,0,0,ibm_direction,amp_l,&
-                                        n_wave,l_0,phase_l,n,l,hmap_tha,lx_tha,ly_tha,&
-                                        nx_hmap_tha,ny_hmap_tha,frifv)
-    allocate(frifvout(count(frifv(1:n(1),1:n(2),1:n(3),10)>tiny(1._rp)),26))
+    iout_wall = merge(iout1d,ibm_iout_wall,ibm_iout_wall < 0)
+    if(iout_wall > 0) then ! set-up of the per-point wall outputs
+      call calc_grad_dist(fri_u,lo,ibm_direction,amp_l,n_wave,l_0,phase_l,n,l,dl,zc,zf,&
+                                  band_u,1,0,0,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,dzf,dzc)
+      call calc_grad_dist(fri_v,lo,ibm_direction,amp_l,n_wave,l_0,phase_l,n,l,dl,zc,zf,&
+                                  band_v,0,1,0,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,dzf,dzc)
+      call calc_grad_dist(fri_w,lo,ibm_direction,amp_l,n_wave,l_0,phase_l,n,l,dl,zc,zf,&
+                                  band_w,0,0,1,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,dzf,dzc)
+      call calc_grad_dist(p_grad,lo,ibm_direction,amp_l,n_wave,l_0,phase_l,n,l,dl,zc,zf,&
+                                  band_s,0,0,0,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,dzf,dzc)                    
+      !
+      call init_wall_force(n,lo,l,dl,zc,zf,dzc,dzf,mask_u,mask_v,mask_w,mask_s,ibm_direction,amp_l,n_wave,l_0,phase_l, &
+                           hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha)
+      allocate(frifv(0:n(1),0:n(2),0:n(3),19))
+      call init_fric_cubes(wf_cell,mask_s,lo,dl,zc,zf,dzc,&
+                                          dzf,xf_g,yc_g,0,0,0,ibm_direction,amp_l,&
+                                          n_wave,l_0,phase_l,n,l,hmap_tha,lx_tha,ly_tha,&
+                                          nx_hmap_tha,ny_hmap_tha,frifv)
+      allocate(frifvout(count(frifv(1:n(1),1:n(2),1:n(3),10)>tiny(1._rp)),26))
+    end if
     !
 #if defined (_OPENACC)
     !$acc enter data copyin(lap_u,lap_v,lap_w,lap_s)
@@ -689,7 +692,6 @@ program cans
     !$acc update self(scalars(iscal)%val)
   end do
   ! write the inital condition
-  iout_wall = merge(iout1d,ibm_iout_wall,ibm_iout_wall < 0)
   if(iout1d > 0.and.mod(istep,max(iout1d,1)) == 0) then
     include 'out1d.h90'
     call out1d_chan(trim(datadir)//'turb_stats_'//fldnum//'.out',ng,lo,hi,3,l,dl,zc_g,u,v,w)
