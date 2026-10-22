@@ -18,7 +18,7 @@ module mod_sanity
   use mod_initflow  , only: add_noise
   use mod_initmpi   , only: initmpi
   use mod_initsolver, only: initsolver
-  use mod_param     , only: ipencil_axis,is_impdiff,is_impdiff_1d,is_poisson_pcr_tdma,small
+  use mod_param     , only: ipencil_axis,is_impdiff,is_impdiff_1d,is_poisson_pcr_tdma,small,adv_form
 #if !defined(_OPENACC)
   use mod_solver    , only: solver
 #else
@@ -59,6 +59,9 @@ module mod_sanity
     end if
     if(is_poisson_pcr_tdma .and. (ipencil_axis == 3)) then
       if(myid == 0)  print*, 'ERROR: `is_poisson_pcr_tdma = T` requires X/Y-aligned pencils.'; call abortit
+    end if
+    if(.not.any(trim(adv_form) == ['vv ','div'])) then
+      if(myid == 0)  print*, 'ERROR: `adv_form` must be either `vv` or `div`.'; call abortit
     end if
   end subroutine test_sanity_input
   !

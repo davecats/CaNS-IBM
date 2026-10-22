@@ -356,6 +356,7 @@ This namelist defines parameters related to the numerical discretization and com
 &numerics
 is_impdiff = F, is_impdiff_1d = F
 is_poisson_pcr_tdma = F
+adv_form = 'vv'
 /
 ```
 
@@ -365,6 +366,13 @@ In these lines, `is_impdiff` and `is_impdiff_1d` enable the (semi-) **implicit t
 * `is_impdiff_1d` is similar to `is_impdiff`, but with implicit diffusion *only* along Z, which may be advantageous when the grid along Z is much finer than along the other directions; *for optimal parallel performance, the domain should not be decomposed along Z* (`ipencil_axis=3`, or `ipencil_axis = 1/2` with `dims(2) = 1`)
 
 Finally, `is_poisson_pcr_tdma`, if `.true.`, allows for solving the Poisson/Helmholtz equations along Z with a parallel cyclic reduction--tridiagonal matrix algorithm (PCR-TDMA) method. This approach may result in major gains in scalability for pencil-distributed simulations at scale, on many GPUs.
+
+`adv_form` selects the **discretization of the advection term** of the momentum equation, both in the separate and in the fused (`is_fast_mom_kernels = T`) kernels:
+
+* `'vv'` (default): skew-symmetric form of Verstappen & Veldman; it conserves kinetic energy also on non-uniform grids, provided the velocity field is discretely divergence-free.
+* `'div'`: divergence (flux) form; it conserves momentum in the strict flux sense also where the discrete divergence is not zero (e.g., in near-wall cells with the immersed-boundary method), but it is not energy-conserving on a grid stretched along Z.
+
+The two forms differ only by the term `u*div(u)/2`, so they coincide for a discretely divergence-free field. Before this option existed, `is_ibm = T` forced `'div'` when `is_fast_mom_kernels = F`.
 
 # About the `&other_options` namelist under `input.nml`
 

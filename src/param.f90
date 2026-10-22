@@ -109,6 +109,7 @@ logical, protected :: is_impdiff = .false., is_impdiff_1d = .false., &
                       is_poisson_pcr_tdma = .false., &
                       is_fast_mom_kernels = .true., &
                       is_gridpoint_natural_channel = .false.
+character(len=3), protected :: adv_form = 'vv' ! advection form: 'vv' (skew-symmetric, Verstappen & Veldman) or 'div' (divergence)
 !
 ! i/o backend parameters
 !
@@ -182,7 +183,8 @@ contains
                        is_impdiff,is_impdiff_1d, &
                        is_poisson_pcr_tdma, &
                        is_fast_mom_kernels, &
-                       is_gridpoint_natural_channel
+                       is_gridpoint_natural_channel, &
+                       adv_form
     namelist /other_options/ &
                             is_debug,is_debug_poisson, &
                             is_timing, &
