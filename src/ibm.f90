@@ -1116,11 +1116,11 @@ module mod_ibm
             dz_int=dzf(k);dy_int=(yg(j)-yg(j-1));dx_int=(xg(i)-xg(i-1))!get dx,dy,dz from global
             A_dx=dy_int*dz_int*0.01_rp;A_dy=dx_int*dz_int*0.01_rp;A_dz=dx_int*dy_int*0.01_rp
             do kc=1,10
-                z_int=z-0.5_rp*dz_int+real(kc,kind=rp)/10._rp*dzf(k)! since we start from the cell center 
+                z_int=z-0.5_rp*dz_int+(real(kc,kind=rp)-0.5_rp)/10._rp*dz_int ! sub-cell centre
                 do jc=1,10
-                    y_int=y-0.5_rp*dy_int+real(jc,kind=rp)/10._rp*dy_int
+                    y_int=y-0.5_rp*dy_int+(real(jc,kind=rp)-0.5_rp)/10._rp*dy_int
                     do ic=1,10
-                        x_int=x-0.5_rp*dx_int+real(ic,kind=rp)/10._rp*dx_int
+                        x_int=x-0.5_rp*dx_int+(real(ic,kind=rp)-0.5_rp)/10._rp*dx_int
                         if(isInbody(ibm_direction,amp_l,n_wave,l_0,phase_l,x_int,y_int,z_int,n,l,&
                                     hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap))then
                             mask_subcell(ic,jc,kc)=.true. ! this subcell is in solid
