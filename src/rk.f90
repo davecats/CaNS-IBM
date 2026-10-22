@@ -695,22 +695,27 @@ module mod_rk
     real(rp),intent(inout),dimension(0:,0:,0:)  :: B_id
     real(rp),intent(in)                         :: dt_loop,visc
     real(rp), intent(in),dimension(3)           :: dl
-    real(rp)                                    :: ksi_l,e_l,dt_visc,eps
-    integer                                     :: i,j,k,cnt
+    real(rp)                                    :: ksi_l,e_l,dt_visc
+    real(rp), parameter                         :: ksi_small = 1.e-3_rp, ksi_large = 50._rp
+    integer                                     :: i,j,k
     dt_visc = dt_loop*visc
-    eps=1e-10_rp
     !$acc parallel loop collapse(3) default(present) private(ksi_l,e_l) async(1)
-    !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
+    !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared) PRIVATE(ksi_l,e_l)
     do k=lbound(laplacian_id,3),ubound(laplacian_id,3)
       do j=lbound(laplacian_id,2),ubound(laplacian_id,2)
         do i=lbound(laplacian_id,1),ubound(laplacian_id,1)
           ksi_l=laplacian_id(i,j,k)*dt_visc
-          e_l=exp(ksi_l)-1._rp
-          if(e_l>eps)then
-            B_id(i,j,k)=ksi_l/e_l
-          else
+          ! B = ksi/(exp(ksi)-1): Taylor series for small ksi (avoids the cancellation
+          ! in exp(ksi)-1), exp(-ksi) form for large ksi (avoids the overflow)
+          if(ksi_l<ksi_small)then
             B_id(i,j,k)=1._rp/(1._rp+ksi_l/2._rp+&
                               ksi_l**2/6._rp+ksi_l**3/24._rp)
+          elseif(ksi_l<=ksi_large)then
+            e_l=exp(ksi_l)-1._rp
+            B_id(i,j,k)=ksi_l/e_l
+          else
+            e_l=exp(-ksi_l)
+            B_id(i,j,k)=ksi_l*e_l/(1._rp-e_l)
           endif
           A_id(i,j,k)=ksi_l+B_id(i,j,k)
         end do
