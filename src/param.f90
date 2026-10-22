@@ -446,6 +446,7 @@ contains
         close(iunit)
         error stop
       end if
+    rewind(iunit)
     !
     ! read hmap namelist
     !
