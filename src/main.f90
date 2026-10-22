@@ -44,7 +44,8 @@ program cans
   use mod_load           , only: load_one
   use mod_mom            , only: bulk_forcing
   use mod_rk             , only: rk,rk_scal,calc_a_b
-  use mod_output         , only: out0d,gen_alias,out1d,out1d_chan,out2d,out3d,write_log_output,write_visu_2d,write_visu_3d
+  use mod_output         , only: out0d,gen_alias,out1d,out1d_chan,out1d_chan_ibm,out2d,out3d, &
+                                 write_log_output,write_visu_2d,write_visu_3d
   use mod_param          , only: ng,l,dl,dli, &
                                  gtype,gr, &
                                  dzp_fine,dzp_coarse,&
@@ -670,6 +671,8 @@ program cans
     include 'out1d.h90'
     call out1d_chan(trim(datadir)//'turb_stats_'//fldnum//'.out',ng,lo,hi,3,l,dl,zc_g,u,v,w)
     if(is_ibm)then
+      call out1d_chan_ibm(trim(datadir)//'turb_stats_ibm_'//fldnum//'.out',ng,lo,hi,l,dl,zc_g,u,v,w, &
+                          mask_u,mask_v,mask_w,mask_s)
       call calc_shear_st(fri_u,u,visc)
       call calc_shear_st(fri_v,v,visc)
       call calc_shear_st(fri_w,w,visc)
@@ -987,6 +990,8 @@ program cans
       end do
       call out1d_chan(trim(datadir)//'turb_stats_'//fldnum//'.out',ng,lo,hi,3,l,dl,zc_g,u,v,w)
       if(is_ibm)then
+        call out1d_chan_ibm(trim(datadir)//'turb_stats_ibm_'//fldnum//'.out',ng,lo,hi,l,dl,zc_g,u,v,w, &
+                            mask_u,mask_v,mask_w,mask_s)
         call calc_shear_st(fri_u,u,visc)
         call calc_shear_st(fri_v,v,visc)
         call calc_shear_st(fri_w,w,visc)
