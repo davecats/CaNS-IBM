@@ -97,7 +97,7 @@ program cans
   use mod_updatep        , only: updatep
   use mod_utils          , only: bulk_mean,calc_mean_flow,&
                                  calc_mean_flow_easy,chk_ibm, &
-                                 bulk_mean_ibm,bulk_forcing_ibm
+                                 bulk_mean_ibm,bulk_forcing_ibm,ibm_impulse
 #if defined(_OPENACC)
   use mod_utils          , only: device_memory_footprint
 #endif
@@ -138,6 +138,10 @@ program cans
   !
   real(rp) :: dt,dti,dt_cfl,time,dtrk,dtrki,divtot,divmax
   real(rp) :: velmax_solid(3),divtot_m,divmax_m,ubulk_fl
+  logical  :: is_ibm_force,is_ibm_map
+  real(rp), allocatable, dimension(:,:,:) :: imp_map ! column-integrated IB force (x,y) of the lower wall
+  real(rp) :: imp_ibm(2,2,3),imp_leak(2,2,3),pi_drive(3) ! IB force: (lower/upper half, fluid/solid, component)
+  real(rp) :: p_ref
   integer :: irk,istep,iunit
   real(rp), allocatable, dimension(:) :: dzc  ,dzf  ,zc  ,zf  ,dzci  ,dzfi, &
                                          dzc_g,dzf_g,zc_g,zf_g,dzci_g,dzfi_g, &
@@ -581,6 +585,8 @@ program cans
 #if defined (_OPENACC)
     !$acc enter data copyin(mask_u,mask_v,mask_w,mask_s)
 #endif
+    allocate(imp_map(n(1),n(2),2))
+    !$acc enter data create(imp_map)
   endif
   if(is_ibm)then
     print*, "***2nd Order IBM coefficients are deploying***"
@@ -721,11 +727,25 @@ program cans
     tauxo(:,:) = 0.; tauyo(:,:) = 0.; tauzo(:,:) = 0.
     dpdl(:)     = 0.
     fs(1:nscal) = 0.
+    is_ibm_map   = is_ibm.and.iout1d > 0.and.mod(istep,max(iout1d,1)) == 0
+    is_ibm_force = is_ibm.and.iout0d > 0.and.mod(istep,max(iout0d,1)) == 0
+    is_ibm_force = is_ibm_force.or.is_ibm_map
+    if(is_ibm_force) then
+      imp_ibm(:,:,:)  = 0.
+      imp_leak(:,:,:) = 0.
+      imp_map(:,:,:)  = 0.
+      !$acc update device(imp_map)
+    end if
     do irk=1,3
       dtrk = sum(rkcoeff(:,irk))*dt
       dtrki = dtrk**(-1)
       !****//IBM\\****!
       if(is_ibm)then
+        if(is_ibm_force) then ! velocity the projection left in the solid
+          call ibm_impulse('leak',n,lo,ng,grid_vol_ratio_f,mask_u,A_u,B_u,0._rp,u,imp_leak(:,:,1),imp_map(:,:,1))
+          call ibm_impulse('leak',n,lo,ng,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,v,imp_leak(:,:,2),imp_map(:,:,2))
+          call ibm_impulse('leak',n,lo,ng,grid_vol_ratio_c,mask_w,A_w,B_w,0._rp,w,imp_leak(:,:,3))
+        end if
         call apply_ibm_staircase(u,mask_u,dtrk)
         call apply_ibm_staircase(v,mask_v,dtrk)
         call apply_ibm_staircase(w,mask_w,dtrk)
@@ -742,6 +762,11 @@ program cans
         call calc_a_b(lap_v,A_v,B_v,dtrk,visc,dl)
         call calc_a_b(lap_w,A_w,B_w,dtrk,visc,dl)
       endif
+      if(is_ibm_force) then
+        call ibm_impulse('pre',n,lo,ng,grid_vol_ratio_f,mask_u,A_u,B_u,0._rp,u,imp_ibm(:,:,1),imp_map(:,:,1))
+        call ibm_impulse('pre',n,lo,ng,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,v,imp_ibm(:,:,2),imp_map(:,:,2))
+        call ibm_impulse('pre',n,lo,ng,grid_vol_ratio_c,mask_w,A_w,B_w,0._rp,w,imp_ibm(:,:,3))
+      end if
       !*******************!
       do iscal=1,nscal
         s => scalars(iscal)
@@ -770,6 +795,13 @@ program cans
         if(is_forced(3)) call bulk_forcing_ibm(n,mask_w,A_w,f(3),w)
       else
         call bulk_forcing(n,is_forced,f,u,v,w)
+      end if
+      if(is_ibm_force) then
+        call ibm_impulse('post',n,lo,ng,grid_vol_ratio_f,mask_u,A_u,B_u,merge(f(1),0._rp,is_forced(1)),u,imp_ibm(:,:,1), &
+                         imp_map(:,:,1))
+        call ibm_impulse('post',n,lo,ng,grid_vol_ratio_f,mask_v,A_v,B_v,merge(f(2),0._rp,is_forced(2)),v,imp_ibm(:,:,2), &
+                         imp_map(:,:,2))
+        call ibm_impulse('post',n,lo,ng,grid_vol_ratio_c,mask_w,A_w,B_w,merge(f(3),0._rp,is_forced(3)),w,imp_ibm(:,:,3))
       end if
       dpdl(:) = dpdl(:) + f(:)
       if(is_impdiff) then
@@ -807,6 +839,15 @@ program cans
     end do
     dpdl(:)     = -dpdl(:)*dti
     fs(1:nscal) = fs(1:nscal)*dti
+    if(is_ibm_force) then
+      call MPI_ALLREDUCE(MPI_IN_PLACE,imp_ibm ,size(imp_ibm ),MPI_REAL_RP,MPI_SUM,MPI_COMM_WORLD,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,imp_leak,size(imp_leak),MPI_REAL_RP,MPI_SUM,MPI_COMM_WORLD,ierr)
+      imp_ibm(:,:,:)  = imp_ibm(:,:,:)*dti
+      imp_leak(:,:,:) = imp_leak(:,:,:)*dti
+      !$acc update self(imp_map)
+      imp_map(:,:,:)  = imp_map(:,:,:)*dti
+    end if
+    pi_drive(:) = bforce(:) - dpdl(:) ! total driving force per unit volume in this step
 
     !
     ! check simulation stopping criteria
@@ -916,6 +957,22 @@ program cans
           call out0d(trim(datadir)//'forcing_s_'//scalnum//'.out',3,var)
         end if
       end do
+      if(is_ibm_force) then
+        !
+        ! force the IB exerts on the fluid in this time step, per unit box volume (sign: drag > 0),
+        ! from the momentum the IB removes from the plain explicit update (see `ibm_impulse`);
+        ! at steady state, total + wall stresses at the domain boundaries = pi_drive
+        !
+        var(1)     = time
+        var(2:4)   = pi_drive(:)
+        var(5:7)   = sum(sum(imp_ibm(:,:,:)+imp_leak(:,:,:),1),1) ! total
+        var(8:10)  = sum(imp_ibm(1,:,:)+imp_leak(1,:,:),1)       ! lower half of the domain
+        var(11:13) = sum(imp_ibm(2,:,:)+imp_leak(2,:,:),1)       ! upper half of the domain
+        var(14:16) = sum(imp_ibm(:,1,:),1)                       ! fluid (band) points, lambda term
+        var(17:19) = sum(imp_ibm(:,2,:),1)                       ! solid points, predictor
+        var(20:22) = sum(imp_leak(:,2,:),1)                      ! solid points, projection leakage
+        call out0d(trim(datadir)//'ibm_force.out',22,var)
+      end if
     end if
     write(fldnum,'(i7.7)') istep
     ! turb_statistics+ friction statistics
@@ -963,10 +1020,15 @@ program cans
           call write_data(trim(datadir)//"pressure"//fldnum//".out",myid,p_grad_g)
         endif
         !FV method for calculating the wall friction 
+        call calc_mean_flow(grid_vol_ratio_f,mask_s,p,p_ref,n) ! pressure level of the FV normal force
         call calc_fric_cubes(lo,u,v,w,p,dli(1),dli(2),dzci,zf,zc,&
                             visc,band_s,mom_saveu,mom_savev,mom_savew,&
-                            bforce(1),bforce(2),bforce(3),dt_fv,frifv,frifvout)!s
+                            pi_drive(1),pi_drive(2),pi_drive(3),dt_fv,frifv,frifvout, &
+                            mask_u,mask_v,mask_w,p_ref)!s
         call writeFVfric(trim(datadir)//'FV-fric_'//trim(mpiranknum)//'_s_'//fldnum//'.out',frifvout)
+        ! wall stress map of the lower wall from the exact IB force of this time step
+        if(ibm_direction(0,3)) &
+          call out_ibm_wall_stress(trim(datadir)//'ibm_wall_stress_'//fldnum//'.out',n,lo,ng,l,dl,pi_drive,imp_map)
         !this is for the fricition calculation w/ FVM
       endif
     endif

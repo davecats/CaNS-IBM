@@ -1375,18 +1375,31 @@ module mod_ibm
             output(i,j,k,19)=normal(3)            
         endif
     end subroutine get_fric_cubes
-    subroutine calc_fric_cubes(lo,u,v,w,p,dxi,dyi,dzci,zf,zc,visc,band_s,&
-                                mom_savedx,mom_savedy,mom_savedz,bforcex,bforcey,bforcez,&
-                                dti,cubeInput,output)
-        real(rp),intent(in),dimension(0:,0:,0:)             :: u,v,w
+    subroutine calc_fric_cubes(lo,u_in,v_in,w_in,p_in,dxi,dyi,dzci,zf,zc,visc,band_s,&
+                                mom_savedx_in,mom_savedy_in,mom_savedz_in,bforcex,bforcey,bforcez,&
+                                dti,cubeInput,output,mask_u,mask_v,mask_w,p_ref)
+        !
+        ! FV wall force per band cell, from the momentum balance of its fluid part.
+        ! bforce[x,y,z] must be the total driving force per unit volume (bforce - dpdl).
+        ! The velocities are used with the solid faces zeroed (as the next RK stage sees them),
+        ! and the pressure relative to p_ref: the cell surfaces are not closed (the wall face
+        ! is missing), so the normal force depends on the arbitrary pressure level; it is
+        ! reported relative to p_ref (the fluid-mean pressure). Only integrated values over
+        ! many cells are meaningful; the single-cell split into normal/tangential parts is not
+        ! the local traction.
+        !
+        real(rp),intent(in),dimension(0:,0:,0:)             :: u_in,v_in,w_in
+        logical ,intent(in),dimension(0:,0:,0:)             :: mask_u,mask_v,mask_w
+        real(rp),intent(in)                                 :: p_ref
+        real(rp),allocatable,dimension(:,:,:)               :: u,v,w,p,mom_savedx,mom_savedy,mom_savedz
         integer,intent(in),dimension(3)                     :: lo
         real(rp),intent(in),dimension(0:)                   :: dzci,zf,zc
         real(rp),intent(in)                                 :: dxi,dyi
         real(rp),intent(in)                                 :: visc,dti 
         logical, intent(in),dimension(0:,0:,0:)             :: band_s
-        real(rp),intent(in),dimension(0:,0:,0:)             :: p 
+        real(rp),intent(in),dimension(0:,0:,0:)             :: p_in
         real(rp),intent(in)                                 :: bforcex,bforcey,bforcez
-        real(rp),intent(in),dimension(0:,0:,0:)             :: mom_savedx,mom_savedy,mom_savedz
+        real(rp),intent(in),dimension(0:,0:,0:)             :: mom_savedx_in,mom_savedy_in,mom_savedz_in
         real(rp)                                            :: A_tot,cell_vol,fluid_vol,solid_vol
         real(rp),dimension(3)                               :: normal
         
@@ -1421,6 +1434,12 @@ module mod_ibm
         integer :: nx_l,ny_l,nz_l
         diag=.false.
         sum_fwall = 0._rp;sum_awall = 0._rp;count = 0;sum_fvol=0._rp;shear_st=0._rp;
+        allocate(u,mold=u_in);allocate(v,mold=v_in);allocate(w,mold=w_in);allocate(p,mold=p_in)
+        allocate(mom_savedx,mold=u_in);allocate(mom_savedy,mold=v_in);allocate(mom_savedz,mold=w_in)
+        u = merge(0._rp,u_in,mask_u); mom_savedx = merge(0._rp,mom_savedx_in,mask_u)
+        v = merge(0._rp,v_in,mask_v); mom_savedy = merge(0._rp,mom_savedy_in,mask_v)
+        w = merge(0._rp,w_in,mask_w); mom_savedz = merge(0._rp,mom_savedz_in,mask_w)
+        p = p_in - p_ref
         nx_l = ubound(band_s,1)-1
         ny_l = ubound(band_s,2)-1
         nz_l = ubound(band_s,3)-1
@@ -1706,6 +1725,58 @@ module mod_ibm
         enddo
     end subroutine calc_fric_cubes
     !
+    subroutine out_ibm_wall_stress(fname,n,lo,ng,l,dl,pi_drive,imp_map)
+        !
+        ! local wall stress of the lower wall in the plan view, from the IB force of one
+        ! time step integrated over each (i,j) column of the lower half (imp_map, per unit
+        ! box volume and time, see `ibm_impulse`) minus the driving force on the solid
+        ! part of the column: tau_x(i,j) = F_x(i,j)/(dx*dy) - pi_x*h_s(x,y), h_s being the
+        ! wall height above z = 0 (not the staircase height: the band cells hold the cut
+        ! cell's solid part); tau_x at (xf(i),yc(j)), tau_y at (xc(i),yf(j)); z-walls only
+        !
+        use mpi
+        implicit none
+        character(len=*), intent(in)                 :: fname
+        integer , intent(in), dimension(3)           :: n,lo,ng
+        real(rp), intent(in), dimension(3)           :: l,dl,pi_drive
+        real(rp), intent(in), dimension(:,:,:)       :: imp_map
+        real(rp), allocatable, dimension(:,:,:)      :: tau
+        integer :: i,j,ig,jg,iunit,ierr,myid
+        call MPI_COMM_RANK(MPI_COMM_WORLD,myid,ierr)
+        allocate(tau(ng(1),ng(2),2))
+        tau(:,:,:) = 0._rp
+        if(lo(3) == 1) then ! one rank per (i,j) column subtracts the solid part
+            do j=1,n(2)
+                jg = lo(2)+j-1
+                do i=1,n(1)
+                    ig = lo(1)+i-1
+                    tau(ig,jg,1) = -pi_drive(1)*wall_height(0,3,ig*dl(1),(jg-0.5_rp)*dl(2),amp_l,n_wave,l_0,phase_l,l, &
+                                                            hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha)
+                    tau(ig,jg,2) = -pi_drive(2)*wall_height(0,3,(ig-0.5_rp)*dl(1),jg*dl(2),amp_l,n_wave,l_0,phase_l,l, &
+                                                            hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha)
+                end do
+            end do
+        end if
+        do j=1,n(2)
+            jg = lo(2)+j-1
+            do i=1,n(1)
+                ig = lo(1)+i-1
+                tau(ig,jg,:) = tau(ig,jg,:) + imp_map(i,j,1:2)*product(l(:))/(dl(1)*dl(2))
+            end do
+        end do
+        if(myid == 0) then
+            call MPI_REDUCE(MPI_IN_PLACE,tau,size(tau),MPI_REAL_RP,MPI_SUM,0,MPI_COMM_WORLD,ierr)
+            open(newunit=iunit,file=fname,status='replace',action='write')
+            do j=1,ng(2)
+                do i=1,ng(1)
+                    write(iunit,'(2i8,2(1x,es24.16e3))') i,j,tau(i,j,1),tau(i,j,2)
+                end do
+            end do
+            close(iunit)
+        else
+            call MPI_REDUCE(tau,tau,size(tau),MPI_REAL_RP,MPI_SUM,0,MPI_COMM_WORLD,ierr)
+        end if
+    end subroutine out_ibm_wall_stress
     subroutine writeFVfric(fname,output)
         implicit none
         real(rp),dimension(:,:),intent(in)       :: output

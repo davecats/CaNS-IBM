@@ -8,7 +8,7 @@ module mod_utils
   implicit none
   private
   public bulk_mean,f_sizeof,swap,calc_mean_flow,calc_mean_flow_easy,chk_ibm
-  public bulk_mean_ibm,bulk_forcing_ibm
+  public bulk_mean_ibm,bulk_forcing_ibm,ibm_impulse
 #if defined(_OPENACC)
   public device_memory_footprint
 #endif
@@ -106,6 +106,106 @@ contains
       end do
     end do
   end subroutine bulk_forcing_ibm
+  pure function ibm_impulse_point(ipart,is_solid,a,b,ff,p) result(q)
+    !$acc routine seq
+    !
+    ! one point of `ibm_impulse` (ipart = 1, 2, 3 for 'leak', 'pre', 'post')
+    !
+    use mod_types
+    implicit none
+    integer , intent(in) :: ipart
+    logical , intent(in) :: is_solid
+    real(rp), intent(in) :: a,b,ff,p
+    real(rp) :: q
+    q = 0.
+    if(is_solid) then
+      if(ipart == 1) q = p
+      if(ipart == 3) q = a*p + ff
+    else
+      if(ipart == 2) q = (1.-b)*p
+      if(ipart == 3) q = (a-1.)*p
+    end if
+  end function ibm_impulse_point
+  subroutine ibm_impulse(part,n,lo,ng,grid_vol_ratio,mask,a,b,ff,p,imp,map)
+    !
+    ! local contribution to the momentum the IB removes from one velocity component in one
+    ! RK stage, i.e. u_free - u_ibm summed with the weights grid_vol_ratio, where u_free is the
+    ! plain explicit update (u_old + rhs + ff, rhs = a*u_rk - b*u_old) applied everywhere:
+    !   part = 'leak' (before zeroing the solid at the stage start): sum_solid u
+    !   part = 'pre'  (after calc_a_b, before rk)                  : sum_fluid (1-b)*u_old
+    !   part = 'post' (after the bulk forcing, before zeroing)     : sum_fluid (a-1)*u_new
+    !                                                                + sum_solid (a*u_rk + ff)
+    ! (with u_new = u_rk + ff/a at the fluid points, see `bulk_forcing_ibm`);
+    ! imp(1:2,1) accumulates the fluid, imp(1:2,2) the solid points, each split into
+    ! the lower (k <= ng(3)/2) and upper halves of the domain;
+    ! map(i,j), if present, accumulates the lower-half sum over each (i,j) column
+    !
+    use mod_types
+    implicit none
+    character(len=*), intent(in)                :: part
+    integer , intent(in   ), dimension(3)        :: n,lo,ng
+    real(rp), intent(in   ), dimension(0:)       :: grid_vol_ratio
+    logical , intent(in   ), dimension(0:,0:,0:) :: mask
+    real(rp), intent(in   ), dimension(0:,0:,0:) :: a,b,p
+    real(rp), intent(in   )                      :: ff
+    real(rp), intent(inout), dimension(2,2)      :: imp
+    real(rp), intent(inout), dimension(:,:), optional :: map
+    real(rp) :: imp_fb,imp_ft,imp_sb,imp_st,q
+    integer  :: i,j,k,ipart,kh
+    kh = ng(3)/2-lo(3)+1 ! last local k of the lower half
+    select case(part)
+    case('leak')
+      ipart = 1
+    case('pre')
+      ipart = 2
+    case default
+      ipart = 3
+    end select
+    imp_fb = 0.; imp_ft = 0.; imp_sb = 0.; imp_st = 0.
+    !$acc data copy(imp_fb,imp_ft,imp_sb,imp_st) async(1)
+    !$acc parallel loop collapse(3) default(present) private(q) &
+    !$acc reduction(+:imp_fb,imp_ft,imp_sb,imp_st) async(1)
+    !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)  PRIVATE(q) &
+    !$OMP REDUCTION(+:imp_fb,imp_ft,imp_sb,imp_st)
+    do k=1,n(3)
+      do j=1,n(2)
+        do i=1,n(1)
+          q = ibm_impulse_point(ipart,mask(i,j,k),a(i,j,k),b(i,j,k),ff,p(i,j,k))*grid_vol_ratio(k)
+          if(mask(i,j,k)) then
+            if(k <= kh) then
+              imp_sb = imp_sb + q
+            else
+              imp_st = imp_st + q
+            end if
+          else
+            if(k <= kh) then
+              imp_fb = imp_fb + q
+            else
+              imp_ft = imp_ft + q
+            end if
+          end if
+        end do
+      end do
+    end do
+    !$acc end data
+    if(present(map)) then
+      !$acc parallel loop collapse(2) default(present) private(q) async(1)
+      !$OMP PARALLEL DO   COLLAPSE(2) DEFAULT(shared)  PRIVATE(q,k)
+      do j=1,n(2)
+        do i=1,n(1)
+          q = 0.
+          do k=1,n(3)
+            if(k <= kh) &
+              q = q + ibm_impulse_point(ipart,mask(i,j,k),a(i,j,k),b(i,j,k),ff,p(i,j,k))*grid_vol_ratio(k)
+          end do
+          map(i,j) = map(i,j) + q
+        end do
+      end do
+    end if
+    !$acc wait(1)
+    imp(:,1) = imp(:,1) + [imp_fb,imp_ft]
+    imp(:,2) = imp(:,2) + [imp_sb,imp_st]
+  end subroutine ibm_impulse
   subroutine calc_mean_flow(grid_vol_ratio,mask_id,field_id,mean,n)
     !
     ! compute the mean value of an observable over the entire domain
