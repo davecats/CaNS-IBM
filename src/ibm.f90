@@ -289,7 +289,8 @@ module mod_ibm
                                     ! this means we are close to body region and both cells that we check are fluid now
                                     ! we check if in between part has body!
                                     if(z<hmax.and..not.mask_id(i,j,k).and..not.isInbody(ibm_direction,amp_l,n_wave,l_0,phase_l,&
-                                                                                xp,y,z,n,l,hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap))then
+                                                                                xp,y,z,n,l,&
+                                                                                hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap))then
                                         ncand=ncand+1
                                         do c=1,14
                                             ! we check 15 times
@@ -318,7 +319,8 @@ module mod_ibm
                                 endif
                                 if(calc_inBetween)then 
                                     if(z<hmax.and..not.mask_id(i,j,k).and..not.isInbody(ibm_direction,amp_l,n_wave,l_0,phase_l,&
-                                                                                xm,y,z,n,l,hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap))then
+                                                                                xm,y,z,n,l,&
+                                                                                hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap))then
                                         ncand=ncand+1
                                         do c=1,14
                                             ! we check 4 times since 5th time is on the neigbour which it is in fluid
@@ -346,7 +348,8 @@ module mod_ibm
                                 endif
                                 if(calc_inBetween)then 
                                     if(z<hmax.and..not.mask_id(i,j,k).and..not.isInbody(ibm_direction,amp_l,n_wave,l_0,phase_l,&
-                                                                                x,yp,z,n,l,hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap))then
+                                                                                x,yp,z,n,l,&
+                                                                                hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap))then
                                         ncand=ncand+1
                                         do c=1,14
                                             dl_int=dl(2)*real(c,kind=rp)/15
@@ -373,7 +376,8 @@ module mod_ibm
                                 endif
                                 if(calc_inBetween)then 
                                     if(z<hmax.and..not.mask_id(i,j,k).and..not.isInbody(ibm_direction,amp_l,n_wave,l_0,phase_l,&
-                                                                                x,ym,z,n,l,hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap))then
+                                                                                x,ym,z,n,l,&
+                                                                                hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap))then
                                         ncand=ncand+1
                                         do c=1,14
                                             dl_int=dl(2)*real(c,kind=rp)/15
