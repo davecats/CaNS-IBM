@@ -717,13 +717,11 @@ program cans
         call calc_a_b(lap_u,A_u,B_u,dtrk,visc,dl)
         call calc_a_b(lap_v,A_v,B_v,dtrk,visc,dl)
         call calc_a_b(lap_w,A_w,B_w,dtrk,visc,dl)
-        do nscalibm=1,nscal
-          call calc_a_b(lap_s,A_s,B_s,dtrk,scalars(nscalibm)%alpha,dl)
-        end do  
       endif
       !*******************!
       do iscal=1,nscal
         s => scalars(iscal)
+        if(ibm_2nd) call calc_a_b(lap_s,A_s,B_s,dtrk,s%alpha,dl) ! A_s, B_s depend on the diffusivity
         call rk_scal(rkcoeff(:,irk),n,dli,l,dzci,dzfi,grid_vol_ratio_f,s%alpha,dt,is_bound,u,v,w, &
                      s%is_forced,s%scalf,s%source,s%fluxo,s%dsdtrko,s%val,s%f,A_s,B_s)
         call bulk_forcing_s(n,s%is_forced,s%f,s%val)
