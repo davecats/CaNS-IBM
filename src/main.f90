@@ -144,7 +144,6 @@ program cans
   character(len=6) :: impart
   real(rp), allocatable, dimension(:,:,:) :: imp_map ! column-integrated IB force (x,y) of the lower wall
   real(rp) :: imp_ibm(2,2,3),imp_leak(2,2,3),pi_drive(3) ! IB force: (lower/upper half, fluid/solid, component)
-  real(rp) :: p_ref
   integer :: irk,istep,iunit
   real(rp), allocatable, dimension(:) :: dzc  ,dzf  ,zc  ,zf  ,dzci  ,dzfi, &
                                          dzc_g,dzf_g,zc_g,zf_g,dzci_g,dzfi_g, &
@@ -216,10 +215,9 @@ program cans
   real(rp),allocatable,target  :: fri_u_g(:,:),fri_v_g(:,:),fri_w_g(:,:),p_grad_g(:,:)
   real(rp),allocatable,target  :: dum_g(:,:)
   real(rp),pointer      :: globu(:,:),globv(:,:),globw(:,:),globp(:,:)
-  real(rp),allocatable :: mom_saveu(:,:,:),mom_savev(:,:,:),mom_savew(:,:,:)
   real(rp),allocatable :: frifv(:,:,:,:),frifvout(:,:)
   character (len=7)   :: mpiranknum 
-  real(rp) :: dt_fv
+  real(rp) :: dtrk_last = 0._rp,p_wf,pp_wf,fac_wf ! exact wall force per cell: previous stage's dt_rk, pressure levels
   real(rp) :: ibm_idx_off(12)
 !*******HMAP********!,
   !for init grid
@@ -637,11 +635,10 @@ program cans
     call calc_grad_dist(p_grad,lo,ibm_direction,amp_l,n_wave,l_0,phase_l,n,l,dl,zc,zf,&
                                 band_s,0,0,0,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,dzf,dzc)                    
     !
-    allocate(mom_saveu,mold=u)
-    allocate(mom_savev,mold=v)
-    allocate(mom_savew,mold=w)
+    call init_wall_force(n,lo,l,dl,zc,zf,dzc,dzf,mask_u,mask_v,mask_w,mask_s,ibm_direction,amp_l,n_wave,l_0,phase_l, &
+                         hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha)
     allocate(frifv(0:n(1),0:n(2),0:n(3),19))
-    call init_fric_cubes(band_s,mask_s,lo,dl,zc,zf,dzc,&
+    call init_fric_cubes(wf_cell,mask_s,lo,dl,zc,zf,dzc,&
                                         dzf,xf_g,yc_g,0,0,0,ibm_direction,amp_l,&
                                         n_wave,l_0,phase_l,n,l,hmap_tha,lx_tha,ly_tha,&
                                         nx_hmap_tha,ny_hmap_tha,frifv)
@@ -651,7 +648,6 @@ program cans
     !$acc enter data copyin(lap_u,lap_v,lap_w,lap_s)
     !$acc enter data copyin(fri_u,fri_v,fri_w,p_grad)
     !$acc enter data copyin(band_s,band_u)
-    !$acc enter data create(mom_saveu,mom_savev,mom_savew)
 #endif
     write(mpiranknum,'(i7.7)') myid !for naming the rank based output
   endif
@@ -774,6 +770,18 @@ program cans
           call ibm_impulse('leak',n,lo,ng,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,v,imp_leak(:,:,2),imp_map(:,:,2))
           call ibm_impulse('leak',n,lo,ng,grid_vol_ratio_c,mask_w,A_w,B_w,0._rp,w,imp_leak(:,:,3))
         end if
+        if(is_ibm_map) then ! leakage = -dt_rk*grad(pp) of the previous stage ('none' only)
+          fac_wf = merge(dtrk_last,0._rp,trim(ibm_proj) == 'none')
+          if(fac_wf > 0._rp) then
+            call calc_mean_flow(grid_vol_ratio_f,mask_s,pp,pp_wf,n)
+            call wf_gather(1,n,dli,dzfi,grid_vol_ratio_f,mask_u,fac_wf,pp,pp_wf,0._rp)
+            call wf_gather(2,n,dli,dzfi,grid_vol_ratio_f,mask_v,fac_wf,pp,pp_wf,0._rp)
+            call wf_gather(3,n,dli,dzfi,grid_vol_ratio_f,mask_w,fac_wf,pp,pp_wf,0._rp)
+          end if
+          call wf_scatter('leak',1,dli,dzci,grid_vol_ratio_f,mask_u,A_u,B_u,fac_wf,0._rp,pp,u)
+          call wf_scatter('leak',2,dli,dzci,grid_vol_ratio_f,mask_v,A_v,B_v,fac_wf,0._rp,pp,v)
+          call wf_scatter('leak',3,dli,dzci,grid_vol_ratio_c,mask_w,A_w,B_w,fac_wf,0._rp,pp,w)
+        end if
         call apply_ibm_staircase(u,mask_u,dtrk)
         call apply_ibm_staircase(v,mask_v,dtrk)
         call apply_ibm_staircase(w,mask_w,dtrk)
@@ -794,6 +802,11 @@ program cans
         call ibm_impulse('pre',n,lo,ng,grid_vol_ratio_f,mask_u,A_u,B_u,0._rp,u,imp_ibm(:,:,1),imp_map(:,:,1))
         call ibm_impulse('pre',n,lo,ng,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,v,imp_ibm(:,:,2),imp_map(:,:,2))
         call ibm_impulse('pre',n,lo,ng,grid_vol_ratio_c,mask_w,A_w,B_w,0._rp,w,imp_ibm(:,:,3))
+      end if
+      if(is_ibm_map) then
+        call wf_scatter('pre',1,dli,dzci,grid_vol_ratio_f,mask_u,A_u,B_u,0._rp,0._rp,p,u)
+        call wf_scatter('pre',2,dli,dzci,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,0._rp,p,v)
+        call wf_scatter('pre',3,dli,dzci,grid_vol_ratio_c,mask_w,A_w,B_w,0._rp,0._rp,p,w)
       end if
       !*******************!
       do iscal=1,nscal
@@ -841,6 +854,15 @@ program cans
                          imp_map(:,:,2))
         call ibm_impulse(impart,n,lo,ng,grid_vol_ratio_c,mask_w,A_w,B_w,merge(f(3),0._rp,is_forced(3)),w,imp_ibm(:,:,3))
       end if
+      if(is_ibm_map) then
+        call calc_mean_flow(grid_vol_ratio_f,mask_s,p,p_wf,n)
+        call wf_gather(1,n,dli,dzfi,grid_vol_ratio_f,mask_u,dtrk,p,p_wf,dtrk*bforce(1)+merge(f(1),0._rp,is_forced(1)))
+        call wf_gather(2,n,dli,dzfi,grid_vol_ratio_f,mask_v,dtrk,p,p_wf,dtrk*bforce(2)+merge(f(2),0._rp,is_forced(2)))
+        call wf_gather(3,n,dli,dzfi,grid_vol_ratio_f,mask_w,dtrk,p,p_wf,dtrk*bforce(3)+merge(f(3),0._rp,is_forced(3)))
+        call wf_scatter(impart,1,dli,dzci,grid_vol_ratio_f,mask_u,A_u,B_u,dtrk,bforce(1),p,u)
+        call wf_scatter(impart,2,dli,dzci,grid_vol_ratio_f,mask_v,A_v,B_v,dtrk,bforce(2),p,v)
+        call wf_scatter(impart,3,dli,dzci,grid_vol_ratio_c,mask_w,A_w,B_w,dtrk,bforce(3),p,w)
+      end if
       dpdl(:) = dpdl(:) + f(:)
       if(is_impdiff) then
         alpha = -.5*visc*dtrk
@@ -863,6 +885,11 @@ program cans
           call ibm_impulse('impl',n,lo,ng,grid_vol_ratio_f,mask_u,A_u,B_u,0._rp,u,imp_ibm(:,:,1),imp_map(:,:,1))
           call ibm_impulse('impl',n,lo,ng,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,v,imp_ibm(:,:,2),imp_map(:,:,2))
           call ibm_impulse('impl',n,lo,ng,grid_vol_ratio_c,mask_w,A_w,B_w,0._rp,w,imp_ibm(:,:,3))
+        end if
+        if(is_ibm_map .and. is_impdiff_1d) then
+          call wf_scatter('impl',1,dli,dzci,grid_vol_ratio_f,mask_u,A_u,B_u,0._rp,0._rp,p,u)
+          call wf_scatter('impl',2,dli,dzci,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,0._rp,p,v)
+          call wf_scatter('impl',3,dli,dzci,grid_vol_ratio_c,mask_w,A_w,B_w,0._rp,0._rp,p,w)
         end if
       end if
       !*******************!
@@ -891,10 +918,20 @@ program cans
           call ibm_impulse_proj(2,n,lo,ng,dli,dzci,grid_vol_ratio_f,dtrk,mask_v,A_v,pp,imp_leak(:,:,2),imp_map(:,:,2))
           call ibm_impulse_proj(3,n,lo,ng,dli,dzci,grid_vol_ratio_c,dtrk,mask_w,A_w,pp,imp_leak(:,:,3))
         end if
+        if(is_ibm_map) then
+          call calc_mean_flow(grid_vol_ratio_f,mask_s,pp,pp_wf,n)
+          call wf_gather(1,n,dli,dzfi,grid_vol_ratio_f,mask_u,dtrk,pp,pp_wf,0._rp)
+          call wf_gather(2,n,dli,dzfi,grid_vol_ratio_f,mask_v,dtrk,pp,pp_wf,0._rp)
+          call wf_gather(3,n,dli,dzfi,grid_vol_ratio_f,mask_w,dtrk,pp,pp_wf,0._rp)
+          call wf_scatter('proj',1,dli,dzci,grid_vol_ratio_f,mask_u,A_u,B_u,dtrk,0._rp,pp,u)
+          call wf_scatter('proj',2,dli,dzci,grid_vol_ratio_f,mask_v,A_v,B_v,dtrk,0._rp,pp,v)
+          call wf_scatter('proj',3,dli,dzci,grid_vol_ratio_c,mask_w,A_w,B_w,dtrk,0._rp,pp,w)
+        end if
       else
         call correc(n,dli,dzci,dtrk,pp,u,v,w)
       end if
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.true.,dl,dzc,dzf,u,v,w)
+      dtrk_last = dtrk
       call updatep(n,dli,dzci,dzfi,alpha,pp,p)
       call boundp(cbcpre,n,bcpre,nb,is_bound,dl,dzc,p)
     end do
@@ -1045,9 +1082,6 @@ program cans
     if(iout1d > 0.and.mod(istep,max(iout1d,1)) == 0) then
       !$acc wait
       !$acc update self(u,v,w,p)
-      if(is_ibm)then
-        !$acc update self(mom_saveu,mom_savev,mom_savew)
-      endif
       do iscal=1,nscal
         !$acc update self(scalars(iscal)%val)
       end do
@@ -1088,25 +1122,12 @@ program cans
           call write_data(trim(datadir)//"pressure"//fldnum//".out",myid,p_grad_g)
         endif
         !FV method for calculating the wall friction 
-        call calc_mean_flow(grid_vol_ratio_f,mask_s,p,p_ref,n) ! pressure level of the FV normal force
-        call calc_fric_cubes(lo,u,v,w,p,dli(1),dli(2),dzci,zf,zc,&
-                            visc,band_s,mom_saveu,mom_savev,mom_savew,&
-                            pi_drive(1),pi_drive(2),pi_drive(3),dt_fv,frifv,frifvout, &
-                            mask_u,mask_v,mask_w,p_ref)!s
+        call calc_wall_force(n,lo,l,dti,pi_drive,mask_s,frifv,frifvout) ! exact wall force per cell of this step
         call writeFVfric(trim(datadir)//'FV-fric_'//trim(mpiranknum)//'_s_'//fldnum//'.out',frifvout)
         ! wall stress map of the lower wall from the exact IB force of this time step
         if(ibm_direction(0,3)) &
           call out_ibm_wall_stress(trim(datadir)//'ibm_wall_stress_'//fldnum//'.out',n,lo,ng,l,dl,pi_drive,imp_map)
         !this is for the fricition calculation w/ FVM
-      endif
-    endif
-    if(is_ibm)then
-      if(iout1d > 0.and.mod(istep+1,max(iout1d,1)) == 0) then
-        ! we need the old momentum
-        call save_mom(u,band_u,mom_saveu)
-        call save_mom(v,band_v,mom_savev)
-        call save_mom(w,band_w,mom_savew)
-        dt_fv=dti
       endif
     endif
     !

@@ -4,6 +4,20 @@ module mod_ibm
     use mod_thakkar
     use decomp_2d, only: update_halo
     implicit none
+    !
+    ! exact wall force per cell (`FV-fric` output, see `init_wall_force`): for each velocity
+    ! component c, the points whose IB impulse is assigned along the wall directions
+    ! (band points: the lambda part; solid points next to the fluid: the local fluxes), with
+    ! up to wf_ntmax target cells; wf_imp accumulates the impulse per cell and component
+    !
+    integer , parameter :: wf_ntmax = 12
+    integer :: wf_np(3) = 0
+    integer , allocatable, dimension(:,:,:)   :: wf_ijk       ! (3,np,c)
+    integer , allocatable, dimension(:,:)     :: wf_nt        ! (np,c)
+    integer , allocatable, dimension(:,:,:,:) :: wf_tc        ! (3,wf_ntmax,np,c)
+    real(rp), allocatable, dimension(:,:,:)   :: wf_tw        ! (wf_ntmax,np,c)
+    real(rp), allocatable, dimension(:,:,:,:) :: wf_imp       ! (0:n1+1,0:n2+1,0:n3+1,c)
+    logical , allocatable, dimension(:,:,:)   :: wf_cell      ! cells that may hold wall force
     contains 
     ! we initalize the ibm coef. here
     ! at the main.f90
@@ -1162,7 +1176,8 @@ module mod_ibm
         real(rp)                                            :: dx_int,dy_int,dz_int
         integer                                             :: co
         real(rp)                                            :: cell_vol,fluid_vol,solid_vol
-        logical,dimension(10,10,10)                         :: mask_subcell
+        integer, parameter                                  :: nsub = 20 ! sub-cells per direction
+        logical,dimension(nsub,nsub,nsub)                   :: mask_subcell
         integer                                             :: s_xp,s_xm,s_yp,s_ym,s_zp,s_zm 
         real(rp)                                            :: A_dx,A_dy,A_dz,A_x,A_y,A_z
         real(rp)                                            :: A_xsi,A_ysi,A_zsi
@@ -1189,13 +1204,13 @@ module mod_ibm
             call get_grid_loc(lo,i,j,k,dl,zc,zf,dix,diy,diz,x,y,z,xp,xm,yp,ym,zp,zm)
             ! now lets check the inside of the band point with smaller cubes
             dz_int=dzf(k);dy_int=(yg(j)-yg(j-1));dx_int=(xg(i)-xg(i-1))!get dx,dy,dz from global
-            A_dx=dy_int*dz_int*0.01_rp;A_dy=dx_int*dz_int*0.01_rp;A_dz=dx_int*dy_int*0.01_rp
-            do kc=1,10
-                z_int=z-0.5_rp*dz_int+(real(kc,kind=rp)-0.5_rp)/10._rp*dz_int ! sub-cell centre
-                do jc=1,10
-                    y_int=y-0.5_rp*dy_int+(real(jc,kind=rp)-0.5_rp)/10._rp*dy_int
-                    do ic=1,10
-                        x_int=x-0.5_rp*dx_int+(real(ic,kind=rp)-0.5_rp)/10._rp*dx_int
+            A_dx=dy_int*dz_int/nsub**2;A_dy=dx_int*dz_int/nsub**2;A_dz=dx_int*dy_int/nsub**2
+            do kc=1,nsub
+                z_int=z-0.5_rp*dz_int+(real(kc,kind=rp)-0.5_rp)/nsub*dz_int ! sub-cell centre
+                do jc=1,nsub
+                    y_int=y-0.5_rp*dy_int+(real(jc,kind=rp)-0.5_rp)/nsub*dy_int
+                    do ic=1,nsub
+                        x_int=x-0.5_rp*dx_int+(real(ic,kind=rp)-0.5_rp)/nsub*dx_int
                         if(isInbody(ibm_direction,amp_l,n_wave,l_0,phase_l,x_int,y_int,z_int,n,l,&
                                     hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap))then
                             mask_subcell(ic,jc,kc)=.true. ! this subcell is in solid
@@ -1204,11 +1219,11 @@ module mod_ibm
                     end do 
                 end do 
             end do
-            do kc=1,10
-                do jc=1,10
-                    do ic=1,10
+            do kc=1,nsub
+                do jc=1,nsub
+                    do ic=1,nsub
                             if(mask_subcell(ic,jc,kc))then
-                                if(ic<10)then
+                                if(ic<nsub)then
                                     if(.not.mask_subcell(ic+1,jc,kc))then ! neigbour isnt in solid
                                         s_xp=s_xp+1! thus its area is what we look
                                     endif
@@ -1218,7 +1233,7 @@ module mod_ibm
                                         s_xm=s_xm+1
                                     endif
                                 endif
-                                if(jc<10)then
+                                if(jc<nsub)then
                                     if(.not.mask_subcell(ic,jc+1,kc))then
                                         s_yp=s_yp+1
                                     endif
@@ -1228,7 +1243,7 @@ module mod_ibm
                                         s_ym=s_ym+1
                                     endif
                                 endif
-                                if(kc<10)then
+                                if(kc<nsub)then
                                     if(.not.mask_subcell(ic,jc,kc+1))then
                                         s_zp=s_zp+1
                                     endif
@@ -1291,11 +1306,11 @@ module mod_ibm
             endif
             !lets get the inlet values
             x_in=count(.not.mask_subcell(1,:,:))*A_dx
-            x_out=count(.not.mask_subcell(10,:,:))*A_dx
+            x_out=count(.not.mask_subcell(nsub,:,:))*A_dx
             y_in=count(.not.mask_subcell(:,1,:))*A_dy
-            y_out=count(.not.mask_subcell(:,10,:))*A_dy
+            y_out=count(.not.mask_subcell(:,nsub,:))*A_dy
             z_in=count(.not.mask_subcell(:,:,1))*A_dz
-            z_out=count(.not.mask_subcell(:,:,10))*A_dz
+            z_out=count(.not.mask_subcell(:,:,nsub))*A_dz
             ! surface area
             if(co>0)then
                 A_x=(s_xp+s_xm)*A_dx;A_y=(s_yp+s_ym)*A_dy;A_z=(s_zp+s_zm)*A_dz;
@@ -1305,7 +1320,7 @@ module mod_ibm
             if(co>0)call nomrlalize_vec([A_xsi,A_ysi,A_zsi],normal) ! we already fill the otherones before
             ! now lets calc the vol.
             cell_vol=dx_int*dy_int*dz_int 
-            solid_vol=(real(co,rp)/1000._rp)*cell_vol
+            solid_vol=(real(co,rp)/nsub**3)*cell_vol
             fluid_vol=(1*cell_vol)-solid_vol
             if(inloop)then
                 A_inlets(1,1)=x_in;A_inlets(2,1)=x_out;
@@ -1375,355 +1390,452 @@ module mod_ibm
             output(i,j,k,19)=normal(3)            
         endif
     end subroutine get_fric_cubes
-    subroutine calc_fric_cubes(lo,u_in,v_in,w_in,p_in,dxi,dyi,dzci,zf,zc,visc,band_s,&
-                                mom_savedx_in,mom_savedy_in,mom_savedz_in,bforcex,bforcey,bforcez,&
-                                dti,cubeInput,output,mask_u,mask_v,mask_w,p_ref)
+    subroutine init_wall_force(n,lo,l,dl,zc,zf,dzc,dzf,mask_u,mask_v,mask_w,mask_s,ibm_direction,amp_l,n_wave,l_0,phase_l,&
+                               hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap)
         !
-        ! FV wall force per band cell, from the momentum balance of its fluid part.
-        ! bforce[x,y,z] must be the total driving force per unit volume (bforce - dpdl).
-        ! The velocities are used with the solid faces zeroed (as the next RK stage sees them),
-        ! and the pressure relative to p_ref: the cell surfaces are not closed (the wall face
-        ! is missing), so the normal force depends on the arbitrary pressure level; it is
-        ! reported relative to p_ref (the fluid-mean pressure). Only integrated values over
-        ! many cells are meaningful; the single-cell split into normal/tangential parts is not
-        ! the local traction.
+        ! set-up of the exact wall force per cell (`wf_gather`, `wf_scatter`, `calc_wall_force`):
+        !  - wf_cell: the cells next to the fluid/solid interface (both kinds in their 3x3x3 neighbourhood)
+        !  - per velocity component, the points next to the interface: band points (fluid, with a solid
+        !    neighbour) and solid points with a fluid neighbour; their impulse is split over the wall
+        !    directions with the weights lambda_d/lambda (band) or 1/h_d^2 (solid), and each direction
+        !    goes to the cell that contains the wall point between the two nodes (`calc_lambda`);
+        !    a wall point on a face normal to the staggered direction is split between the two cells
         !
-        real(rp),intent(in),dimension(0:,0:,0:)             :: u_in,v_in,w_in
-        logical ,intent(in),dimension(0:,0:,0:)             :: mask_u,mask_v,mask_w
-        real(rp),intent(in)                                 :: p_ref
-        real(rp),allocatable,dimension(:,:,:)               :: u,v,w,p,mom_savedx,mom_savedy,mom_savedz
-        integer,intent(in),dimension(3)                     :: lo
-        real(rp),intent(in),dimension(0:)                   :: dzci,zf,zc
-        real(rp),intent(in)                                 :: dxi,dyi
-        real(rp),intent(in)                                 :: visc,dti 
-        logical, intent(in),dimension(0:,0:,0:)             :: band_s
-        real(rp),intent(in),dimension(0:,0:,0:)             :: p_in
-        real(rp),intent(in)                                 :: bforcex,bforcey,bforcez
-        real(rp),intent(in),dimension(0:,0:,0:)             :: mom_savedx_in,mom_savedy_in,mom_savedz_in
-        real(rp)                                            :: A_tot,cell_vol,fluid_vol,solid_vol
-        real(rp),dimension(3)                               :: normal
-        
-        real(rp)                                            :: sum_fwall,sum_awall,real_fwall,sum_fvol
-        real(rp),dimension(3)                               :: F_wall_c,st_fwall_v,st_fwall_s
-                                                                ! x 
-        real(rp)                                            :: uuip,uuim,vujp,vujm,wukp,wukm
-        real(rp)                                            :: dudxp,dudxm,dudyp,dudym,dudzp,dudzm
-        real(rp)                                            :: F_wall_x,mom_x,bforce_x,p_x_in,p_x_out
-        integer                                             :: count
-                                                                !y
-        real(rp)                                            :: uvip,uvim,vvjp,vvjm,wvkp,wvkm
-        real(rp)                                            :: dvdxp,dvdxm,dvdyp,dvdym,dvdzp,dvdzm
-        real(rp)                                            :: F_wall_y,mom_y,bforce_y,p_y_in,p_y_out
-                                                                !z
-        real(rp)                                            :: uwip,uwim,vwjp,vwjm,wwkp,wwkm
-        real(rp)                                            :: dwdxp,dwdxm,dwdyp,dwdym,dwdzp,dwdzm
-        real(rp)                                            :: F_wall_z,mom_z,bforce_z,p_z_in,p_z_out
-                                                                ! 
-        real(rp)                                            :: shear_st
-        integer                                             :: i,j,k
-        real(rp),intent(in),dimension(0:,0:,0:,:)           :: cubeInput
-        real(rp)                                            :: xin,xout,yin,yout,zin,zout
-        real(rp),intent(out),dimension(:,:)                 :: output
-
-        real(rp),dimension(3)                               :: f_pressure_v,st_pressure_v,f_shear_v,st_shear_v
-        real(rp)                                            :: st_pressure_s,f_pressure_s,st_shear_s,f_shear_s
-        logical :: diag
-        integer :: ig,jg,kg
-        real(rp) :: wt,wt1,wb,wb1
-        real(rp), allocatable :: v_fv_halo(:,:,:),w_fv_halo(:,:,:)
-        integer :: nx_l,ny_l,nz_l
-        diag=.false.
-        sum_fwall = 0._rp;sum_awall = 0._rp;count = 0;sum_fvol=0._rp;shear_st=0._rp;
-        allocate(u,mold=u_in);allocate(v,mold=v_in);allocate(w,mold=w_in);allocate(p,mold=p_in)
-        allocate(mom_savedx,mold=u_in);allocate(mom_savedy,mold=v_in);allocate(mom_savedz,mold=w_in)
-        u = merge(0._rp,u_in,mask_u); mom_savedx = merge(0._rp,mom_savedx_in,mask_u)
-        v = merge(0._rp,v_in,mask_v); mom_savedy = merge(0._rp,mom_savedy_in,mask_v)
-        w = merge(0._rp,w_in,mask_w); mom_savedz = merge(0._rp,mom_savedz_in,mask_w)
-        p = p_in - p_ref
-        nx_l = ubound(band_s,1)-1
-        ny_l = ubound(band_s,2)-1
-        nz_l = ubound(band_s,3)-1
-        call update_halo(v(1:nx_l,1:ny_l,1:nz_l),v_fv_halo,2)
-        call update_halo(w(1:nx_l,1:ny_l,1:nz_l),w_fv_halo,2)
-        do k=lbound(band_s,3)+1,ubound(band_s,3)-1
-            do j=lbound(band_s,2)+1,ubound(band_s,2)-1
-                do i=lbound(band_s,1)+1,ubound(band_s,1)-1
-                    A_tot=0._rp;
-                    if(band_s(i,j,k))then
-                        ig=0;jg=0;kg=0;
-                        ig=lo(1)+i-1;jg=lo(2)+j-1;kg=lo(3)+k-1;
-                        fluid_vol=cubeInput(i,j,k,2);A_tot=cubeInput(i,j,k,10);
-                        xin=cubeInput(i,j,k,11);xout=cubeInput(i,j,k,12);
-                        yin=cubeInput(i,j,k,13);yout=cubeInput(i,j,k,14);
-                        zin=cubeInput(i,j,k,15);zout=cubeInput(i,j,k,16);
-                        normal(1)=cubeInput(i,j,k,17);
-                        normal(2)=cubeInput(i,j,k,18);
-                        normal(3)=cubeInput(i,j,k,19);
-                        if(A_tot<=tiny(1._rp))cycle
-                        count=count+1
-                        ! weights face zf(k) bcs of stertchd grid
-                        wt  = (zc(k+1)-zf(k))/(zc(k+1)-zc(k))  
-                        wt1 = (zf(k)-zc(k))  /(zc(k+1)-zc(k))  
-                        ! face zf(k-1) 
-                        wb  = (zf(k-1)-zc(k-1))/(zc(k)-zc(k-1))  
-                        wb1 = (zc(k)-zf(k-1))  /(zc(k)-zc(k-1)) 
-                        call get_momx_s(i,j,k,u,v,w,uuip,uuim,vujp,vujm,wukp,wukm,wt,wt1,wb,wb1)
-                        call get_momx_ds(i,j,k,dxi,dyi,dzci,visc,u,dudxp,dudxm,dudyp,dudym,dudzp,dudzm)
-                        call get_momy_s(i,j,k,u,v,w,uvip,uvim,vvjp,vvjm,wvkp,wvkm,wt,wt1,wb,wb1)
-                        call get_momy_ds(i,j,k,dxi,dyi,dzci,visc,v,dvdxp,dvdxm,dvdyp,dvdym,dvdzp,dvdzm)
-                        if(j == 1) then
-                            dvdym=((0.5_rp*(v_fv_halo(i,j,k)+v_fv_halo(i,j-1,k)))- &
-                                   (0.5_rp*(v_fv_halo(i,j-1,k)+v_fv_halo(i,j-2,k))))*visc*dyi
-                        endif
-                        call get_momz_s(i,j,k,u,v,w,uwip,uwim,vwjp,vwjm,wwkp,wwkm)
-                        call get_momz_ds(i,j,k,dxi,dyi,dzci,visc,w,dwdxp,dwdxm,dwdyp,dwdym,dwdzp,dwdzm)
-                        if (k == 1) then
-                            if (kg > 1) then
-                                ! Internal MPI boundary.
-                                dwdzm = 0.5_rp*(w(i,j,k)-w_fv_halo(i,j,k-2))*visc*dzci(k-1)
-                            else
-                                ! Physical lower wall: center-to-wall derivative.
-                                dwdzm = 0.5_rp*(w(i,j,1)-w(i,j,0))*visc / &
-                                        (zc(1)-zf(0))
-                            endif
-                        endif
-                        call get_px_s(i,j,k,p,p_x_in,p_x_out)
-                        call get_py_s(i,j,k,p,p_y_in,p_y_out)
-                        call get_pz_s(i,j,k,p,p_z_in,p_z_out,wt,wt1,wb,wb1)
-                        mom_x=(0.5_rp*(u(i,j,k)+u(i-1,j,k)))-(0.5_rp*(mom_savedx(i,j,k)+mom_savedx(i-1,j,k)))
-                        mom_y=(0.5_rp*(v(i,j,k)+v(i,j-1,k)))-(0.5_rp*(mom_savedy(i,j,k)+mom_savedy(i,j-1,k)))
-                        mom_z=(0.5_rp*(w(i,j,k)+w(i,j,k-1)))-(0.5_rp*(mom_savedz(i,j,k)+mom_savedz(i,j,k-1)))
-                        F_wall_x=uuip*xout-uuim*xin&
-                               +vujp*yout-vujm*yin&
-                               +wukp*zout-wukm*zin&
-                               +p_x_out*xout-p_x_in*xin&
-                               -dudxp*xout+dudxm*xin&
-                               -dudyp*yout+dudym*yin&
-                               -dudzp*zout+dudzm*zin&
-                               -bforcex*fluid_vol&
-                               +mom_x*fluid_vol*dti 
-                               
-                        F_wall_y=uvip*xout-uvim*xin&
-                               +vvjp*yout-vvjm*yin&
-                               +wvkp*zout-wvkm*zin&
-                               +p_y_out*yout-p_y_in*yin&
-                               -dvdxp*xout+dvdxm*xin&
-                               -dvdyp*yout+dvdym*yin&
-                               -dvdzp*zout+dvdzm*zin&
-                               -bforcey*fluid_vol&
-                               +mom_y*fluid_vol*dti
-                               
-                        F_wall_z=uwip*xout-uwim*xin&
-                               +vwjp*yout-vwjm*yin&
-                               +wwkp*zout-wwkm*zin&
-                               +p_z_out*zout-p_z_in*zin&
-                               -dwdxp*xout+dwdxm*xin&
-                               -dwdyp*yout+dwdym*yin&
-                               -dwdzp*zout+dwdzm*zin&
-                               -bforcez*fluid_vol&
-                               +mom_z*fluid_vol*dti
-
-                        F_wall_c=[F_wall_x,F_wall_y,F_wall_z]
-                        f_pressure_s=dot_product(normal,F_wall_c)
-                        f_pressure_v(1)=f_pressure_s*normal(1)
-                        f_pressure_v(2)=f_pressure_s*normal(2)
-                        f_pressure_v(3)=f_pressure_s*normal(3)
-                        f_shear_v(1)=F_wall_c(1)-f_pressure_v(1)
-                        f_shear_v(2)=F_wall_c(2)-f_pressure_v(2)
-                        f_shear_v(3)=F_wall_c(3)-f_pressure_v(3)
-                        call get_magni(f_shear_v,f_shear_s)
-                        st_pressure_s=f_pressure_s/A_tot
-                        st_pressure_v(1) = f_pressure_v(1)/A_tot
-                        st_pressure_v(2) = f_pressure_v(2)/A_tot
-                        st_pressure_v(3) = f_pressure_v(3)/A_tot
-                                        
-                        st_shear_v(1) = f_shear_v(1)/A_tot
-                        st_shear_v(2) = f_shear_v(2)/A_tot
-                        st_shear_v(3) = f_shear_v(3)/A_tot
-                        st_shear_s = f_shear_s/A_tot
-
-                        output(count,1)  = real(ig,kind=rp)
-                        output(count,2)  = real(jg,kind=rp)
-                        output(count,3)  = real(kg,kind=rp)
-                        ! Geometry
-                        output(count,4)  = A_tot
-                        output(count,5)  = normal(1)
-                        output(count,6)  = normal(2)
-                        output(count,7)  = normal(3)
-                        ! Total wall force
-                        output(count,8)  = F_wall_c(1)
-                        output(count,9)  = F_wall_c(2)
-                        output(count,10) = F_wall_c(3)
-                        ! Normal / pressure force
-                        output(count,11) = f_pressure_s
-                        output(count,12) = f_pressure_v(1)
-                        output(count,13) = f_pressure_v(2)
-                        output(count,14) = f_pressure_v(3)
-                        ! Tangential / shear force
-                        output(count,15) = f_shear_s
-                        output(count,16) = f_shear_v(1)
-                        output(count,17) = f_shear_v(2)
-                        output(count,18) = f_shear_v(3)
-                        ! Normal stress
-                        output(count,19) = st_pressure_s
-                        output(count,20) = st_pressure_v(1)
-                        output(count,21) = st_pressure_v(2)
-                        output(count,22) = st_pressure_v(3)                    
-                        ! Wall shear stress
-                        output(count,23) = st_shear_s
-                        output(count,24) = st_shear_v(1)
-                        output(count,25) = st_shear_v(2)
-                        output(count,26) = st_shear_v(3)
-                        if(diag)then
-                            !conv
-                            print*, "================================================="
-                            print*, "          WALL FORCE FLUX DIAGNOSTICS"
-                            print*, "================================================="
-                            print*, "fluid_vol = ", fluid_vol
-                            print*, "A_tot     = ", A_tot
-                            print*, "normal    = ", normal(1),normal(2),normal(3)
-                            !=========================================================
-                            ! X-MOMENTUM
-                            !=========================================================
-                            print*, " "
-                            print*, "---------------- X-MOMENTUM ----------------"
-                            ! Convection
-                            print*, "Conv +x : ",  uuip*xout
-                            print*, "Conv -x : ", -uuim*xin
-                            print*, "Conv +y : ",  vujp*yout
-                            print*, "Conv -y : ", -vujm*yin
-                            print*, "Conv +z : ",  wukp*zout
-                            print*, "Conv -z : ", -wukm*zin
-                            print*, "Conv net: ", &
-                                  uuip*xout-uuim*xin + &
-                                  vujp*yout-vujm*yin + &
-                                  wukp*zout-wukm*zin
-                            ! Pressure
-                            print*, "Press +x: ",  p_x_out*xout
-                            print*, "Press -x: ", -p_x_in*xin
-
-                            print*, "Press net: ", &
-                                  p_x_out*xout-p_x_in*xin
-                            ! Diffusion
-                            print*, "Diff +x : ", -dudxp*xout
-                            print*, "Diff -x : ",  dudxm*xin
-                            print*, "Diff +y : ", -dudyp*yout
-                            print*, "Diff -y : ",  dudym*yin
-                            print*, "Diff +z : ", -dudzp*zout
-                            print*, "Diff -z : ",  dudzm*zin
-                            print*, "Diff net: ", &
-                                  -dudxp*xout+dudxm*xin - &
-                                   dudyp*yout+dudym*yin - &
-                                   dudzp*zout+dudzm*zin
-                            ! Body force
-                            print*, "Body force: ", -bforcex*fluid_vol
-                            ! Momentum change
-                            print*, "Momentum change: ", mom_x*fluid_vol*dti
-                            print*, "F_wall_x: ", F_wall_x
-                            !=========================================================
-                            ! Y-MOMENTUM
-                            !=========================================================
-                            print*, " "
-                            print*, "---------------- Y-MOMENTUM ----------------"
-                            ! Convection
-                            print*, "Conv +x : ",  uvip*xout
-                            print*, "Conv -x : ", -uvim*xin
-                            print*, "Conv +y : ",  vvjp*yout
-                            print*, "Conv -y : ", -vvjm*yin
-                            print*, "Conv +z : ",  wvkp*zout
-                            print*, "Conv -z : ", -wvkm*zin
-                            print*, "Conv net: ", &
-                                  uvip*xout-uvim*xin + &
-                                  vvjp*yout-vvjm*yin + &
-                                  wvkp*zout-wvkm*zin
-                            ! Pressure
-                            print*, "Press +y: ",  p_y_out*yout
-                            print*, "Press -y: ", -p_y_in*yin
-                            print*, "Press net: ", &
-                                  p_y_out*yout-p_y_in*yin
-                            ! Diffusion
-                            print*, "Diff +x : ", -dvdxp*xout
-                            print*, "Diff -x : ",  dvdxm*xin
-                            print*, "Diff +y : ", -dvdyp*yout
-                            print*, "Diff -y : ",  dvdym*yin
-                            print*, "Diff +z : ", -dvdzp*zout
-                            print*, "Diff -z : ",  dvdzm*zin
-                            print*, "Diff net: ", &
-                                  -dvdxp*xout+dvdxm*xin - &
-                                   dvdyp*yout+dvdym*yin - &
-                                   dvdzp*zout+dvdzm*zin
-                            ! Body force
-                            print*, "Body force: ", -bforcey*fluid_vol
-                            ! Momentum change
-                            print*, "Momentum change: ", mom_y*fluid_vol*dti
-                            print*, "F_wall_y: ", F_wall_y
-                            !=========================================================
-                            ! Z-MOMENTUM
-                            !=========================================================
-                            print*, " "
-                            print*, "---------------- Z-MOMENTUM ----------------"
-                            ! Convection
-                            print*, "Conv +x : ",  uwip*xout
-                            print*, "Conv -x : ", -uwim*xin
-                            print*, "Conv +y : ",  vwjp*yout
-                            print*, "Conv -y : ", -vwjm*yin
-                            print*, "Conv +z : ",  wwkp*zout
-                            print*, "Conv -z : ", -wwkm*zin
-                            print*, "Conv net: ", &
-                                  uwip*xout-uwim*xin + &
-                                  vwjp*yout-vwjm*yin + &
-                                  wwkp*zout-wwkm*zin
-                            ! Pressure
-                            print*, "Press +z: ",  p_z_out*zout
-                            print*, "Press -z: ", -p_z_in*zin
-                            print*, "Press net: ", &
-                                  p_z_out*zout-p_z_in*zin
-                            ! Diffusion
-                            print*, "Diff +x : ", -dwdxp*xout
-                            print*, "Diff -x : ",  dwdxm*xin
-                            print*, "Diff +y : ", -dwdyp*yout
-                            print*, "Diff -y : ",  dwdym*yin
-                            print*, "Diff +z : ", -dwdzp*zout
-                            print*, "Diff -z : ",  dwdzm*zin
-                            print*, "Diff net: ", &
-                                  -dwdxp*xout+dwdxm*xin - &
-                                   dwdyp*yout+dwdym*yin - &
-                                   dwdzp*zout+dwdzm*zin
-                            ! Body force
-                            print*, "Body force: ", -bforcez*fluid_vol
-                            ! Momentum change
-                            print*, "Momentum change: ", mom_z*fluid_vol*dti
-                            print*, "F_wall_z: ", F_wall_z
-                            !=========================================================
-                            ! FORCE DECOMPOSITION
-                            !=========================================================
-                            print*, " "
-                            print*, "-------------- FORCE DECOMPOSITION --------------"
-                            print*, "F_wall vector: ", &
-                                    F_wall_c(1),F_wall_c(2),F_wall_c(3)
-                            print*, "Normal force scalar: ", f_pressure_s
-                            print*, "Normal force vector: ", &
-                                    f_pressure_v(1),f_pressure_v(2),f_pressure_v(3)
-                            print*, "Shear force vector: ", &
-                                    f_shear_v(1),f_shear_v(2),f_shear_v(3)
-                            print*, "Shear force magnitude: ", f_shear_s
-                            print*, "Normal stress: ", st_pressure_s
-                            print*, "Shear stress magnitude: ", st_shear_s
-                            print*, "Shear stress vector: ", &
-                                    st_shear_v(1),st_shear_v(2),st_shear_v(3)
-                            ! Important checks
-                            print*, "F_shear . n = ", dot_product(f_shear_v,normal)
-                            print*, "Force reconstruction residual: ", &
-                                    f_pressure_v(1)+f_shear_v(1)-F_wall_c(1), &
-                                    f_pressure_v(2)+f_shear_v(2)-F_wall_c(2), &
-                                    f_pressure_v(3)+f_shear_v(3)-F_wall_c(3)
-                            print*, "================================================="
-                        endif
-                    endif
-                end do 
+        integer , intent(in), dimension(3)        :: n,lo
+        real(rp), intent(in), dimension(3)        :: l,dl
+        real(rp), intent(in), dimension(0:)       :: zc,zf,dzc,dzf
+        logical , intent(in), dimension(0:,0:,0:) :: mask_u,mask_v,mask_w,mask_s
+        logical , intent(in), dimension(0:1,3)    :: ibm_direction
+        real(rp), intent(in), dimension(0:1,3)    :: amp_l
+        integer , intent(in), dimension(0:1,3)    :: n_wave
+        real(rp), intent(in), dimension(0:1,3)    :: l_0
+        real(rp), intent(in), dimension(0:1,3)    :: phase_l
+        real(rp), intent(in), optional            :: hmap(0:,0:)
+        real(rp), intent(in), optional            :: l1_hmap,l2_hmap
+        integer , intent(in), optional            :: n1_hmap,n2_hmap
+        logical , allocatable, dimension(:,:,:)   :: mask
+        integer  :: c,i,j,k,d,ax,a,ip,nt,npmax,own(3),idx,ie(3),dix,diy,diz
+        real(rp) :: x,y,z,xp,xm,yp,ym,zp,zm,pos(3),xn(3),lam,wsum,wd(6),wl(3,6),dzf_l,dzc_l,wcoord
+        logical  :: has(6),is_solid,is_split,in_cell(-1:1)
+        integer  :: sgn
+        real(rp) :: xs(3),xs2(3)
+        allocate(wf_cell(0:n(1)+1,0:n(2)+1,0:n(3)+1))
+        wf_cell(:,:,:) = .false.
+        do k=1,n(3)
+            do j=1,n(2)
+                do i=1,n(1)
+                    wf_cell(i,j,k) = any(mask_s(i-1:i+1,j-1:j+1,k-1:k+1)).and..not.all(mask_s(i-1:i+1,j-1:j+1,k-1:k+1))
+                end do
             end do
-        enddo
-    end subroutine calc_fric_cubes
+        end do
+        npmax = 0
+        do c=1,3
+            select case(c)
+            case(1); mask = mask_u
+            case(2); mask = mask_v
+            case(3); mask = mask_w
+            end select
+            npmax = max(npmax,count(is_iface(mask,n)))
+        end do
+        allocate(wf_ijk(3,npmax,3),wf_nt(npmax,3),wf_tc(3,wf_ntmax,npmax,3),wf_tw(wf_ntmax,npmax,3))
+        wf_ijk(:,:,:) = 1; wf_nt(:,:) = 0; wf_tc(:,:,:,:) = 1; wf_tw(:,:,:) = 0._rp
+        allocate(wf_imp(0:n(1)+1,0:n(2)+1,0:n(3)+1,3))
+        wf_imp(:,:,:,:) = 0._rp
+        do c=1,3
+            ie(:) = 0; ie(c) = 1
+            dix = ie(1); diy = ie(2); diz = ie(3)
+            select case(c)
+            case(1); mask = mask_u
+            case(2); mask = mask_v
+            case(3); mask = mask_w
+            end select
+            ip = 0
+            do k=1,n(3)
+                do j=1,n(2)
+                    do i=1,n(1)
+                        is_solid = mask(i,j,k)
+                        has(:) = .false.; wd(:) = 0._rp; wl(:,:) = 0._rp
+                        call get_grid_loc(lo,i,j,k,dl,zc,zf,dix,diy,diz,x,y,z,xp,xm,yp,ym,zp,zm)
+                        pos(:) = [x,y,z]
+                        do d=1,6
+                            ax = (d+1)/2
+                            xn(:) = pos(:)
+                            select case(d)
+                            case(1); xn(1) = xp; has(d) = mask(i+1,j,k).neqv.is_solid
+                            case(2); xn(1) = xm; has(d) = mask(i-1,j,k).neqv.is_solid
+                            case(3); xn(2) = yp; has(d) = mask(i,j+1,k).neqv.is_solid
+                            case(4); xn(2) = ym; has(d) = mask(i,j-1,k).neqv.is_solid
+                            case(5); xn(3) = zp; has(d) = mask(i,j,k+1).neqv.is_solid
+                            case(6); xn(3) = zm; has(d) = mask(i,j,k-1).neqv.is_solid
+                            end select
+                            if(.not.has(d)) cycle
+                            dzf_l = 0._rp; dzc_l = 0._rp ! as in `set_ibm_2nd`
+                            if(d == 5) then
+                                if(diz == 0) then
+                                    dzc_l = dzc(k); dzf_l = dzf(k)
+                                else
+                                    dzf_l = dzf(k+1); dzc_l = dzc(k)
+                                end if
+                            else if(d == 6) then
+                                if(diz == 0) then
+                                    dzc_l = dzc(k-1); dzf_l = dzf(k)
+                                else
+                                    dzf_l = dzf(k); dzc_l = dzc(k)
+                                end if
+                            end if
+                            if(.not.is_solid) then
+                                call calc_lambda(pos(1),pos(2),pos(3),xn(ax),ax,lam,ibm_direction,amp_l,n_wave,l_0,phase_l, &
+                                                 n,l,dl,hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap,dzf_l,dzc_l,diz,wl(:,d))
+                                wd(d) = lam
+                            else
+                                call calc_lambda(xn(1),xn(2),xn(3),pos(ax),ax,lam,ibm_direction,amp_l,n_wave,l_0,phase_l, &
+                                                 n,l,dl,hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap,dzf_l,dzc_l,diz,wl(:,d))
+                                wd(d) = 1._rp/(xn(ax)-pos(ax))**2
+                            end if
+                        end do
+                        if(.not.any(has)) cycle
+                        ip = ip+1
+                        wf_ijk(:,ip,c) = [i,j,k]
+                        wsum = sum(wd(:))
+                        if(wsum <= 0._rp) then ! no lambda (wall on the node): equal weights
+                            wd(:) = merge(1._rp,0._rp,has(:)); wsum = sum(wd(:))
+                        end if
+                        nt = 0
+                        do d=1,6
+                            if(.not.has(d)) cycle
+                            ax = (d+1)/2
+                            own(:) = [i,j,k]
+                            is_split = .false.
+                            do a=1,3
+                                if(a == c) then
+                                    if(ax == c) then
+                                        if(mod(d,2) == 1) own(a) = own(a)+1 ! staggered point between cells own and own+1
+                                    else
+                                        is_split = .true.
+                                    end if
+                                else if(a == ax) then
+                                    wcoord = wl(a,d)
+                                    if(a < 3) then
+                                        idx = ceiling(wcoord/dl(a)) - lo(a) + 1
+                                        own(a) = min(max(idx,own(a)-1),own(a)+1)
+                                    else
+                                        if(wcoord >  zf(own(3)  )) own(3) = own(3)+1
+                                        if(wcoord <= zf(own(3)-1)) own(3) = own(3)-1
+                                    end if
+                                end if
+                            end do
+                            if(.not.is_split) then
+                                nt = nt+1
+                                wf_tc(:,nt,ip,c) = own(:)
+                                wf_tw(nt,ip,c) = wd(d)/wsum
+                            else
+                                !
+                                ! the wall point is on the face between cells own and own+1 (along c):
+                                ! give it to the cell(s) in which the wall crosses the segment between
+                                ! the two nodes, shifted by a quarter cell off the face
+                                !
+                                in_cell(:) = .false.
+                                do sgn=-1,1,2
+                                    xs(:) = pos(:); xs(c) = pos(c) + sgn*0.25_rp*h_c(c,k,sgn)
+                                    xs2(:) = xn(:); xs2(c) = xs(c)
+                                    in_cell(sgn) = isInbody(ibm_direction,amp_l,n_wave,l_0,phase_l,xs(1),xs(2),xs(3),n,l, &
+                                                            hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap).neqv. &
+                                                   isInbody(ibm_direction,amp_l,n_wave,l_0,phase_l,xs2(1),xs2(2),xs2(3),n,l, &
+                                                            hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap)
+                                end do
+                                if(.not.any(in_cell)) in_cell(-1:1:2) = .true. ! wall along the face
+                                do sgn=-1,1,2
+                                    if(.not.in_cell(sgn)) cycle
+                                    nt = nt+1
+                                    wf_tc(:,nt,ip,c) = own(:)
+                                    if(sgn == 1) wf_tc(c,nt,ip,c) = own(c)+1
+                                    wf_tw(nt,ip,c) = wd(d)/wsum/count(in_cell)
+                                end do
+                            end if
+                        end do
+                        wf_nt(ip,c) = nt
+                    end do
+                end do
+            end do
+            wf_np(c) = ip
+        end do
+        !$acc enter data copyin(wf_cell,wf_ijk,wf_nt,wf_tc,wf_tw,wf_imp)
+    contains
+        real(rp) function h_c(c,k,sgn)
+            ! width, along c, of the cell on side sgn of the staggered point (cells k, k+1 along z)
+            integer, intent(in) :: c,k,sgn
+            if(c < 3) then
+                h_c = dl(c)
+            else
+                h_c = dzf(k+(sgn+1)/2)
+            end if
+        end function h_c
+        function is_iface(mask,n) result(res)
+            logical, intent(in), dimension(0:,0:,0:) :: mask
+            integer, intent(in), dimension(3)        :: n
+            logical, dimension(n(1),n(2),n(3))       :: res
+            integer :: i,j,k
+            do k=1,n(3)
+                do j=1,n(2)
+                    do i=1,n(1)
+                        res(i,j,k) = any(mask(i-1:i+1:2,j,k).neqv.mask(i,j,k)) .or. &
+                                     any(mask(i,j-1:j+1:2,k).neqv.mask(i,j,k)) .or. &
+                                     any(mask(i,j,k-1:k+1:2).neqv.mask(i,j,k))
+                    end do
+                end do
+            end do
+        end function is_iface
+    end subroutine init_wall_force
+    !
+    subroutine wf_gather(c,n,dli,dzfi,grid_vol_ratio_f,mask,fac,p,pref,fs)
+        !
+        ! cell part of the impulse the IB removes at the solid points of component c (all of them,
+        ! also deep in the solid): the pressure part -fac*grad(p) of each solid point, telescoped onto
+        ! the cells (a cell gets fac*(p-pref)*area from a solid face on its + side and minus that from
+        ! one on its - side, so it cancels inside the solid and is left on the cut cells), and the
+        ! forcing part fs (impulse per unit volume), split over the two half-cells of the point;
+        ! units as `ibm_impulse` (per unit box volume)
+        !
+        integer , intent(in)                      :: c
+        integer , intent(in), dimension(3)        :: n
+        real(rp), intent(in), dimension(3)        :: dli
+        real(rp), intent(in), dimension(0:)       :: dzfi,grid_vol_ratio_f
+        logical , intent(in), dimension(0:,0:,0:) :: mask
+        real(rp), intent(in)                      :: fac,pref,fs
+        real(rp), intent(in), dimension(0:,0:,0:) :: p
+        real(rp) :: sp,sm,area
+        integer  :: i,j,k,di,dj,dk
+        di = 0; dj = 0; dk = 0
+        select case(c)
+        case(1); di = 1
+        case(2); dj = 1
+        case default; dk = 1
+        end select
+        !$acc parallel loop collapse(3) default(present) private(sp,sm,area) async(1)
+        !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)  PRIVATE(sp,sm,area)
+        do k=1,n(3)
+            do j=1,n(2)
+                do i=1,n(1)
+                    if(wf_cell(i,j,k)) then
+                        sp = merge(1._rp,0._rp,mask(i,j,k))
+                        sm = merge(1._rp,0._rp,mask(i-di,j-dj,k-dk))
+                        area = (di*dli(1)+dj*dli(2)+dk*dzfi(k))*grid_vol_ratio_f(k) ! face area/V_box
+                        wf_imp(i,j,k,c) = wf_imp(i,j,k,c) + fac*(p(i,j,k)-pref)*area*(sp-sm) &
+                                                          + fs*.5_rp*grid_vol_ratio_f(k)*(sp+sm)
+                    end if
+                end do
+            end do
+        end do
+    end subroutine wf_gather
+    !
+    subroutine wf_scatter(part,c,dli,dzci,grid_vol_ratio,mask,a,b,fac,bf,phi,vel)
+        !
+        ! point part of the impulse the IB removes from component c, assigned to the wall cells
+        ! (targets from `init_wall_force`), same parts as `ibm_impulse` ('proj': damped correction):
+        !  - band points: the lambda part, 'pre' (1-b)*u, 'post'/'impl' (a-1)*u, 'proj' -fac*grad(phi)*(1-1/a)
+        !  - solid points next to the fluid: the local fluxes, i.e. the impulse minus its pressure and
+        !    forcing parts (`wf_gather`): 'leak' u + fac*grad(phi) (phi, fac of the previous stage),
+        !    'post'/'post_s' a*u - fac*(bf - grad(phi)) (phi = p), 'impl' (ibm_pen-1)*u
+        ! deeper solid points have no flux part
+        !
+        character(len=*), intent(in)              :: part
+        integer , intent(in)                      :: c
+        real(rp), intent(in), dimension(3)        :: dli
+        real(rp), intent(in), dimension(0:)       :: dzci,grid_vol_ratio
+        logical , intent(in), dimension(0:,0:,0:) :: mask
+        real(rp), intent(in), dimension(0:,0:,0:) :: a,b,phi,vel
+        real(rp), intent(in)                      :: fac,bf
+        real(rp) :: q,g
+        integer  :: ip,it,i,j,k,ii,jj,kk,ipart,di,dj,dk,np
+        np = wf_np(c)
+        select case(part)
+        case('leak');   ipart = 1
+        case('pre');    ipart = 2
+        case('post');   ipart = 3
+        case('post_s'); ipart = 4
+        case('impl');   ipart = 5
+        case default;   ipart = 6 ! 'proj'
+        end select
+        di = 0; dj = 0; dk = 0
+        select case(c)
+        case(1); di = 1
+        case(2); dj = 1
+        case default; dk = 1
+        end select
+        !$acc parallel loop default(present) private(q,g,i,j,k,ii,jj,kk) async(1)
+        !$OMP PARALLEL DO   DEFAULT(shared)  PRIVATE(q,g,i,j,k,ii,jj,kk,it)
+        do ip=1,np
+            i = wf_ijk(1,ip,c); j = wf_ijk(2,ip,c); k = wf_ijk(3,ip,c)
+            g = 0._rp
+            if(ipart /= 2 .and. ipart /= 5 .and. fac /= 0._rp) &
+              g = (phi(i+di,j+dj,k+dk)-phi(i,j,k))*(di*dli(1)+dj*dli(2)+dk*dzci(k))
+            q = 0._rp
+            if(mask(i,j,k)) then
+                select case(ipart)
+                case(1);   q = vel(i,j,k) + fac*g
+                case(3,4); q = a(i,j,k)*vel(i,j,k) - fac*(bf - g)
+                case(5);   q = (ibm_pen-1._rp)*vel(i,j,k)
+                end select
+            else
+                select case(ipart)
+                case(2);   q = (1._rp-b(i,j,k))*vel(i,j,k)
+                case(3,5); q = (a(i,j,k)-1._rp)*vel(i,j,k)
+                case(6);   q = -fac*g*(1._rp-1._rp/a(i,j,k))
+                end select
+            end if
+            q = q*grid_vol_ratio(k)
+            !$acc loop seq
+            do it=1,wf_nt(ip,c)
+                ii = wf_tc(1,it,ip,c); jj = wf_tc(2,it,ip,c); kk = wf_tc(3,it,ip,c)
+#if defined(_OPENACC)
+                !$acc atomic update
+#else
+                !$OMP ATOMIC UPDATE
+#endif
+                wf_imp(ii,jj,kk,c) = wf_imp(ii,jj,kk,c) + wf_tw(it,ip,c)*q
+            end do
+        end do
+    end subroutine wf_scatter
+    !
+    subroutine wf_halo_add(n)
+        !
+        ! adds the impulse accumulated in the halo cells to the cells of the neighbouring tasks
+        ! (periodic wrap along the pencil axis), then clears the halos; host data
+        !
+        use mpi
+        integer, intent(in), dimension(3) :: n
+        real(rp), allocatable, dimension(:,:,:,:) :: sb,rb
+        integer :: idir,ierr,nn,nbr(0:1)
+        do idir=1,3
+            select case(idir)
+            case(1); allocate(sb(1,0:n(2)+1,0:n(3)+1,3),rb(1,0:n(2)+1,0:n(3)+1,3))
+            case(2); allocate(sb(0:n(1)+1,1,0:n(3)+1,3),rb(0:n(1)+1,1,0:n(3)+1,3))
+            case(3); allocate(sb(0:n(1)+1,0:n(2)+1,1,3),rb(0:n(1)+1,0:n(2)+1,1,3))
+            end select
+            nn = size(sb)
+            if(idir == ipencil_axis) then
+                if(cbcpre(0,idir)//cbcpre(1,idir) == 'PP') then
+                    call wf_add_plane(idir,n(idir),wf_get_plane(idir,0))
+                    call wf_add_plane(idir,1      ,wf_get_plane(idir,n(idir)+1))
+                end if
+            else
+                nbr(:) = merge(nb(:,idir),MPI_PROC_NULL,nb(:,idir) >= 0) ! cuDecomp marks a missing neighbour by -1
+                sb = wf_get_plane(idir,n(idir)+1); rb = 0._rp
+                call MPI_SENDRECV(sb,nn,MPI_REAL_RP,nbr(1),0,rb,nn,MPI_REAL_RP,nbr(0),0, &
+                                  MPI_COMM_WORLD,MPI_STATUS_IGNORE,ierr)
+                call wf_add_plane(idir,1,rb)
+                sb = wf_get_plane(idir,0); rb = 0._rp
+                call MPI_SENDRECV(sb,nn,MPI_REAL_RP,nbr(0),1,rb,nn,MPI_REAL_RP,nbr(1),1, &
+                                  MPI_COMM_WORLD,MPI_STATUS_IGNORE,ierr)
+                call wf_add_plane(idir,n(idir),rb)
+            end if
+            select case(idir)
+            case(1); wf_imp(0,:,:,:) = 0._rp; wf_imp(n(1)+1,:,:,:) = 0._rp
+            case(2); wf_imp(:,0,:,:) = 0._rp; wf_imp(:,n(2)+1,:,:) = 0._rp
+            case(3); wf_imp(:,:,0,:) = 0._rp; wf_imp(:,:,n(3)+1,:) = 0._rp
+            end select
+            deallocate(sb,rb)
+        end do
+    contains
+        function wf_get_plane(idir,m) result(pl)
+            integer, intent(in) :: idir,m
+            real(rp), allocatable, dimension(:,:,:,:) :: pl
+            select case(idir)
+            case(1); pl = wf_imp(m:m,:,:,:)
+            case(2); pl = wf_imp(:,m:m,:,:)
+            case(3); pl = wf_imp(:,:,m:m,:)
+            end select
+        end function wf_get_plane
+        subroutine wf_add_plane(idir,m,pl)
+            integer, intent(in) :: idir,m
+            real(rp), intent(in), dimension(:,:,:,:) :: pl
+            select case(idir)
+            case(1); wf_imp(m:m,:,:,:) = wf_imp(m:m,:,:,:) + pl
+            case(2); wf_imp(:,m:m,:,:) = wf_imp(:,m:m,:,:) + pl
+            case(3); wf_imp(:,:,m:m,:) = wf_imp(:,:,m:m,:) + pl
+            end select
+        end subroutine wf_add_plane
+    end subroutine wf_halo_add
+    !
+    subroutine calc_wall_force(n,lo,l,dti,pi_drive,mask_s,cubeInput,output)
+        !
+        ! exact wall force per cell for one time step, from the IB impulse accumulated in wf_imp
+        ! over its stages: F = imp*V_box/dt - pi_drive*V_solid (the driving force on the solid part
+        ! of the cell is not a wall force; V_solid from the sub-cell sampling of `get_fric_cubes`).
+        ! Summed over the cells it is the total IB force minus the driving force on the solid, i.e.
+        ! the drag of `ibm_force.out`/`ibm_wall_stress_*.out`. F is the force of the fluid on the
+        ! wall (positive = drag); its component along the normal n (out of the solid) is reported as
+        ! the normal (pressure) part, the rest as the tangential (shear) part. A cell holds the force
+        ! of the nodes next to the wall portion it contains, so single-cell values are local but
+        ! not a pointwise traction. Clears wf_imp.
+        !
+        integer , intent(in), dimension(3)         :: n,lo
+        real(rp), intent(in), dimension(3)         :: l,pi_drive
+        real(rp), intent(in)                       :: dti
+        logical , intent(in), dimension(0:,0:,0:)  :: mask_s
+        real(rp), intent(in), dimension(0:,0:,0:,:):: cubeInput
+        real(rp), intent(out), dimension(:,:)      :: output
+        real(rp) :: A_tot,normal(3),F(3),f_n,f_nv(3),f_tv(3),f_t,r(3)
+        logical  :: nbo(6)
+        integer  :: i,j,k,nc
+        !$acc wait(1)
+        !$acc update self(wf_imp)
+        call wf_halo_add(n)
+        !
+        ! a cell without wall area (by the sub-cell sampling, e.g. a solid cell whose wall lies
+        ! within the sampling distance of a face) passes its force to the face neighbours of
+        ! the other kind (solid/fluid centre), which hold that wall face
+        !
+        do k=1,n(3)
+            do j=1,n(2)
+                do i=1,n(1)
+                    if(.not.wf_cell(i,j,k) .or. cubeInput(i,j,k,10) > tiny(1._rp)) cycle
+                    nbo(:) = [mask_s(i+1,j,k),mask_s(i-1,j,k),mask_s(i,j+1,k),mask_s(i,j-1,k), &
+                              mask_s(i,j,k+1),mask_s(i,j,k-1)].neqv.mask_s(i,j,k)
+                    if(.not.any(nbo)) cycle
+                    r(:) = (wf_imp(i,j,k,:) - pi_drive(:)*cubeInput(i,j,k,3)/(product(l(:))*dti))/count(nbo)
+                    if(nbo(1)) wf_imp(i+1,j,k,:) = wf_imp(i+1,j,k,:) + r(:)
+                    if(nbo(2)) wf_imp(i-1,j,k,:) = wf_imp(i-1,j,k,:) + r(:)
+                    if(nbo(3)) wf_imp(i,j+1,k,:) = wf_imp(i,j+1,k,:) + r(:)
+                    if(nbo(4)) wf_imp(i,j-1,k,:) = wf_imp(i,j-1,k,:) + r(:)
+                    if(nbo(5)) wf_imp(i,j,k+1,:) = wf_imp(i,j,k+1,:) + r(:)
+                    if(nbo(6)) wf_imp(i,j,k-1,:) = wf_imp(i,j,k-1,:) + r(:)
+                    wf_imp(i,j,k,:) = wf_imp(i,j,k,:) - count(nbo)*r(:)
+                end do
+            end do
+        end do
+        call wf_halo_add(n)
+        nc = 0
+        do k=1,n(3)
+            do j=1,n(2)
+                do i=1,n(1)
+                    A_tot = cubeInput(i,j,k,10)
+                    if(A_tot <= tiny(1._rp)) cycle
+                    nc = nc+1
+                    normal(:) = cubeInput(i,j,k,17:19)
+                    F(:) = wf_imp(i,j,k,:)*product(l(:))*dti - pi_drive(:)*cubeInput(i,j,k,3)
+                    f_n = dot_product(normal,F)
+                    f_nv(:) = f_n*normal(:)
+                    f_tv(:) = F(:)-f_nv(:)
+                    f_t = norm2(f_tv)
+                    output(nc,1:3)   = real([lo(1)+i-1,lo(2)+j-1,lo(3)+k-1],rp)
+                    output(nc,4)     = A_tot
+                    output(nc,5:7)   = normal(:)
+                    output(nc,8:10)  = F(:)
+                    output(nc,11)    = f_n
+                    output(nc,12:14) = f_nv(:)
+                    output(nc,15)    = f_t
+                    output(nc,16:18) = f_tv(:)
+                    output(nc,19)    = f_n/A_tot
+                    output(nc,20:22) = f_nv(:)/A_tot
+                    output(nc,23)    = f_t/A_tot
+                    output(nc,24:26) = f_tv(:)/A_tot
+                end do
+            end do
+        end do
+        wf_imp(:,:,:,:) = 0._rp
+        !$acc update device(wf_imp)
+    end subroutine calc_wall_force
     !
     subroutine out_ibm_wall_stress(fname,n,lo,ng,l,dl,pi_drive,imp_map)
         !
@@ -1795,142 +1907,11 @@ module mod_ibm
             end do
         close(iunit)
     end subroutine writeFVfric
-    subroutine save_mom(vel_id,band_id,mom_saved)
-        implicit none
-        real(rp),intent(in),dimension(0:,0:,0:)                 :: vel_id
-        logical, intent(in),dimension(0:,0:,0:)                 :: band_id
-        real(rp),intent(inout),dimension(0:,0:,0:)                :: mom_saved
-        integer :: i,j,k
-        !$acc parallel loop collapse(3) default(present) async(1)
-        !$omp parallel do collapse(3) default(shared)
-        do k=lbound(band_id,3),ubound(band_id,3)
-            do j=lbound(band_id,2),ubound(band_id,2)
-                do i=lbound(band_id,1),ubound(band_id,1)
-                    mom_saved(i,j,k)=vel_id(i,j,k)
-                end do 
-            end do
-        enddo 
-    end subroutine save_mom
     !
     !CaNS in CaNS 
-    subroutine get_px_s(i,j,k,p,p_x_in,p_x_out)
-        real(rp),intent(in),dimension(0:,0:,0:) :: p
-        real(rp),intent(out) :: p_x_in,p_x_out
-        integer,intent(in) :: i,j,k
-        p_x_in=0.5_rp*(p(i,j,k)+p(i-1,j,k));
-        p_x_out=0.5_rp*(p(i+1,j,k)+p(i,j,k))
-    end subroutine get_px_s
-    subroutine get_py_s(i,j,k,p,p_y_in,p_y_out)
-        real(rp),intent(in),dimension(0:,0:,0:) :: p
-        real(rp),intent(out) :: p_y_in,p_y_out
-        integer,intent(in) :: i,j,k
-        p_y_in=0.5_rp*(p(i,j,k)+p(i,j-1,k));
-        p_y_out=0.5_rp*(p(i,j+1,k)+p(i,j,k))
-    end subroutine get_py_s
-    subroutine get_pz_s(i,j,k,p,p_z_in,p_z_out,wt,wt1,wb,wb1)
-        real(rp),intent(in),dimension(0:,0:,0:) :: p
-        real(rp),intent(out) :: p_z_in,p_z_out
-        integer,intent(in) :: i,j,k
-        real(rp),intent(in) :: wt,wt1,wb,wb1
-        p_z_in=(wb*p(i,j,k)+wb1*p(i,j,k-1))
-        p_z_out=(wt1*p(i,j,k+1)+wt*p(i,j,k))
-    end subroutine get_pz_s
-    subroutine get_momx_s(i,j,k,u,v,w,uuip,uuim,vujp,vujm,wukp,wukm,wt,wt1,wb,wb1)
-        implicit none
-        real(rp), dimension(0:,0:,0:), intent(in   ) :: u,v,w
-        integer,intent(in) :: i,j,k
-        real(rp),intent(in) :: wt,wt1,wb,wb1 
-        real(rp),intent(out) :: uuip,uuim,vujp,vujm,wukp,wukm
-        uuip=u(i,j,k)*u(i,j,k)
-        uuim=u(i-1,j,k)*u(i-1,j,k)
-        vujp=0.25*v(i,j,k)*(u(i,j,k)+u(i,j+1,k)+u(i-1,j,k)+u(i-1,j+1,k))
-        vujm=0.25*v(i,j-1,k)*(u(i,j,k)+u(i,j-1,k)+u(i-1,j,k)+u(i-1,j-1,k))
-        wukp=0.5_rp*w(i,j,k)*(wt*(u(i,j,k)+u(i-1,j,k))+wt1*(u(i,j,k+1)+u(i-1,j,k+1)))
-        wukm=0.5_rp*w(i,j,k-1)*(wb*(u(i,j,k)+u(i-1,j,k))+wb1*(u(i,j,k-1)+u(i-1,j,k-1)))
-    end subroutine get_momx_s
-    subroutine get_momy_s(i,j,k,u,v,w,uvip,uvim,vvjp,vvjm,wvkp,wvkm,wt,wt1,wb,wb1)
-        implicit none
-        real(rp), dimension(0:,0:,0:), intent(in   ) :: u,v,w
-        integer,intent(in) :: i,j,k
-        real(rp),intent(in) :: wt,wt1,wb,wb1
-        real(rp),intent(out) :: uvip,uvim,vvjp,vvjm,wvkp,wvkm
-        uvip=0.25*u(i,j,k)*(v(i,j,k)+v(i+1,j,k)+v(i,j-1,k)+v(i+1,j-1,k))
-        uvim=0.25*u(i-1,j,k)*(v(i,j,k)+v(i-1,j,k)+v(i,j-1,k)+v(i-1,j-1,k))
-        vvjp=v(i,j,k)*v(i,j,k)
-        vvjm=v(i,j-1,k)*v(i,j-1,k)
-        wvkp=0.5_rp*w(i,j,k)*(wt*(v(i,j,k)+v(i,j-1,k))+wt1*(v(i,j,k+1)+v(i,j-1,k+1)))
-        wvkm=0.5_rp*w(i,j,k-1)*(wb*(v(i,j,k)+v(i,j-1,k))+wb1*(v(i,j,k-1)+v(i,j-1,k-1)))
-    end subroutine get_momy_s
-    subroutine get_momz_s(i,j,k,u,v,w,uwip,uwim,vwjp,vwjm,wwkp,wwkm)
-        implicit none
-        real(rp), dimension(0:,0:,0:), intent(in   ) :: u,v,w
-        integer,intent(in) :: i,j,k
-        real(rp),intent(out) :: uwip,uwim,vwjp,vwjm,wwkp,wwkm
-        uwip=0.25*u(i,j,k)*(w(i,j,k)+w(i+1,j,k)+w(i,j,k-1)+w(i+1,j,k-1))
-        uwim=0.25*u(i-1,j,k)*(w(i,j,k)+w(i-1,j,k)+w(i,j,k-1)+w(i-1,j,k-1))
-        vwjp=0.25*v(i,j,k)*(w(i,j,k)+w(i,j+1,k)+w(i,j,k-1)+w(i,j+1,k-1))
-        vwjm=0.25*v(i,j-1,k)*(w(i,j,k)+w(i,j-1,k)+w(i,j,k-1)+w(i,j-1,k-1))
-        wwkp=w(i,j,k)*w(i,j,k)
-        wwkm=w(i,j,k-1)*w(i,j,k-1)
-    end subroutine get_momz_s
 
-    subroutine get_momx_ds(i,j,k,dxi,dyi,dzci,visc,u,dudxp,dudxm,dudyp,dudym,dudzp,dudzm)
-        implicit none
-        real(rp), intent(in) :: dxi,dyi
-        real(rp), intent(in), dimension(0:) :: dzci
-        real(rp), intent(in) :: visc
-        real(rp), dimension(0:,0:,0:), intent(in   ) :: u
-        real(rp),intent(out) :: dudxp,dudxm,dudyp,dudym,dudzp,dudzm
-        integer,intent(in) :: i,j,k
-        !for diff we need to have cell centered velocities
-        dudxp=((0.5_rp*(u(i,j,k)+u(i+1,j,k)))-(0.5_rp*(u(i,j,k)+u(i-1,j,k))))*visc*dxi
-        if (i > 1) then
-            dudxm = 0.5_rp*(u(i,j,k)-u(i-2,j,k))*visc*dxi
-        else
-            ! Full x direction is local and periodic: index -1 maps to nx-1.
-            dudxm = 0.5_rp*(u(i,j,k)-u(ubound(u,1)-2,j,k))*visc*dxi
-        endif
-        dudyp=((0.5_rp*(u(i,j+1,k)+u(i-1,j+1,k)))-(0.5_rp*(u(i,j,k)+u(i-1,j,k))))*visc*dyi
-        dudym=((0.5_rp*(u(i,j,k)+u(i-1,j,k)))-(0.5_rp*(u(i,j-1,k)+u(i-1,j-1,k))))*visc*dyi
-        dudzp=((0.5_rp*(u(i,j,k+1)+u(i-1,j,k+1)))-(0.5_rp*(u(i,j,k)+u(i-1,j,k))))*visc*dzci(k)
-        dudzm=((0.5_rp*(u(i,j,k)+u(i-1,j,k)))-(0.5_rp*(u(i,j,k-1)+u(i-1,j,k-1))))*visc*dzci(k-1)
-    end subroutine get_momx_ds
     !
-    subroutine get_momy_ds(i,j,k,dxi,dyi,dzci,visc,v,dvdxp,dvdxm,dvdyp,dvdym,dvdzp,dvdzm)
-    implicit none
-    real(rp), intent(in) :: dxi,dyi
-    real(rp), intent(in), dimension(0:) :: dzci
-    real(rp), intent(in) :: visc
-    real(rp), dimension(0:,0:,0:), intent(in   ) :: v
-    real(rp),intent(out) :: dvdxp,dvdxm,dvdyp,dvdym,dvdzp,dvdzm
-    integer,intent(in) :: i,j,k
-            dvdxp=((0.5_rp*(v(i+1,j,k)+v(i+1,j-1,k)))-(0.5_rp*(v(i,j,k)+v(i,j-1,k))))*visc*dxi
-            dvdxm=((0.5_rp*(v(i,j,k)+v(i,j-1,k)))-(0.5_rp*(v(i-1,j,k)+v(i-1,j-1,k))))*visc*dxi
-            dvdyp=((0.5_rp*(v(i,j+1,k)+v(i,j,k)))-(0.5_rp*(v(i,j,k)+v(i,j-1,k))))*visc*dyi
-            if (j > 1) then
-                dvdym = 0.5_rp*(v(i,j,k)-v(i,j-2,k))*visc*dyi
-            endif
-            dvdzp=((0.5_rp*(v(i,j,k+1)+v(i,j-1,k+1)))-(0.5_rp*(v(i,j,k)+v(i,j-1,k))))*visc*dzci(k)
-            dvdzm=((0.5_rp*(v(i,j,k)+v(i,j-1,k))-(0.5_rp*(v(i,j,k-1)+v(i,j-1,k-1)))))*visc*dzci(k-1)
-    end subroutine get_momy_ds
     !
-    subroutine get_momz_ds(i,j,k,dxi,dyi,dzci,visc,w,dwdxp,dwdxm,dwdyp,dwdym,dwdzp,dwdzm)
-    implicit none
-    real(rp), intent(in) :: dxi,dyi
-    real(rp), intent(in), dimension(0:) :: dzci
-    real(rp), intent(in) :: visc
-    real(rp), dimension(0:,0:,0:), intent(in   ) :: w
-    integer,intent(in) :: i,j,k
-    real(rp),intent(out) :: dwdxp,dwdxm,dwdyp,dwdym,dwdzp,dwdzm
-            dwdxp=((0.5_rp*(w(i+1,j,k)+w(i+1,j,k-1)))-(0.5_rp*(w(i,j,k)+w(i,j,k-1))))*visc*dxi
-            dwdxm=((0.5_rp*(w(i,j,k)+w(i,j,k-1)))-(0.5_rp*(w(i-1,j,k)+w(i-1,j,k-1))))*visc*dxi
-            dwdyp=((0.5_rp*(w(i,j+1,k)+w(i,j+1,k-1)))-(0.5_rp*(w(i,j,k)+w(i,j,k-1))))*visc*dyi
-            dwdym=((0.5_rp*(w(i,j,k)+w(i,j,k-1)))-(0.5_rp*(w(i,j-1,k)+w(i,j-1,k-1))))*visc*dyi
-            dwdzp=((0.5_rp*(w(i,j,k+1)+w(i,j,k)))-(0.5_rp*(w(i,j,k)+w(i,j,k-1))))*visc*dzci(k)
-            if (k > 1) then
-                dwdzm = 0.5_rp*(w(i,j,k)-w(i,j,k-2))*visc*dzci(k-1)
-            endif  
-    end subroutine get_momz_ds
     !
     subroutine write_data(fname,myid,grad_id)
         real(rp),dimension(:,:),intent(in)       :: grad_id
