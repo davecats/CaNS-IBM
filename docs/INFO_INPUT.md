@@ -382,6 +382,25 @@ Finally, `is_poisson_pcr_tdma`, if `.true.`, allows for solving the Poisson/Helm
 
 The two forms differ only by the term `u*div(u)/2`, so they coincide for a discretely divergence-free field. Before this option existed, `is_ibm = T` forced `'div'` when `is_fast_mom_kernels = F`.
 
+# About the `&ibm` namelist under `input.nml` (selected entries)
+
+```fortran
+&ibm
+ibm_shape    = 'macdonald'
+ibm_hch      = -1.
+bulk_vel_def = 'superficial'
+/
+```
+`ibm_shape` selects the analytic wall shape (with `&hmap use_hmap = F`). For a wall normal to direction `t` on side `s` (`ibm_direction(s,t) = T`), with in-plane directions `i = mod(t,3)+1` and `ii = mod(t+1,3)+1`, and the bottom wall at `l_0(0,t) + h`, the top wall at `l_0(1,t) - h`:
+* `'macdonald'` (default): `h = amp_l(s,i)*(1 +/- cos(2 pi n_wave(s,i) x_i/l_i)*cos(2 pi n_wave(s,ii) x_ii/l_ii))` (`+` for the bottom wall); `amp_l(s,ii)` and `phase_l` are ignored, and a warning is printed if they are set.
+* `'sinusoid'`: `h = sum over d = i, ii of amp_l(s,d)/2*(1 + sin(2 pi n_wave(s,d) x_d/l_d + phase_l(s,d)))`.
+
+The roughness height range printed at start-up (`hmin`, `hmax`) is sampled from the actual wall shape on a grid 4 times finer than the mesh in x and y.
+
+`ibm_hch` is the reference half height (`Re_tau = ibm_hch/visc`) of the rough-wall grid `gtype = 5`, whose uniform fine region extends from `z = 0` to `hmax`. It is required for `gtype = 5` (with a height map, the value from the map's info file is used if `ibm_hch` is not set).
+
+`bulk_vel_def` is described with `velf` above.
+
 # About the `&other_options` namelist under `input.nml`
 
 This namelist defines other parameters related to the monitoring, debugging, or benchmarking of a computation. The values below are the default ones, in case the namelist is not specified in the input file.

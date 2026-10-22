@@ -19,83 +19,135 @@ module mod_ibm
         integer , intent(in), dimension(3)       :: n
         real(rp), intent(in), dimension(3)       :: l
         real(rp),intent(in)                      :: x,y,z 
-        real(rp),parameter                       :: pi = 3.141592653589793_rp
-        real(rp)                                 :: height(0:1,3)
-        integer                                  :: side,t
+        integer                                  :: t
         real(rp)                                 :: xyz(3)
         integer                                  :: i,ii
         real(rp),intent(in),optional             :: hmap(0:,0:)
         real(rp),intent(in),optional             :: l1_hmap,l2_hmap 
         integer,intent(in),optional              :: n1_hmap,n2_hmap
-        real(rp)                                 :: dl_hmap(2)
-        integer                                  :: i1(2),i2(2)
-        real(rp)                                 :: r1(2),r2(2)
-        real(rp)                                 :: w1(2),w2(2)
-        logical                                  :: macdonald
-        macdonald=.true.
         xyz = [x,y,z]
-        do side = 0,1
-            do t = 1,3
-                i=modulo(t,3)+1
-                ii=modulo(t+1,3)+1
-                if(ibm_direction(side,t))then
-                    ! use wave wall  
-                    if(.not. use_hmap)then
-                        if(.not.macdonald)then
-                            height(side,t)=amp_l(side,i)*0.5_rp*(1._rp+sin(2._rp*pi*&
-                                            real(n_wave(side,i)*xyz(i)/l(i),rp)+phase_l(side,i)))+&
-                                            amp_l(side,ii)*0.5_rp*(1._rp+sin(2._rp*pi*&
-                                            real(n_wave(side,ii)*xyz(ii)/l(ii),rp)+phase_l(side,ii)))
-                        else
-                            if(side == 0)then
-                                height(side,t)=amp_l(side,i)*(1._rp + &
-                                                cos(2._rp*pi*real(n_wave(side,i)*xyz(i)/l(i),rp))*&
-                                                cos(2._rp*pi*real(n_wave(side,ii)*xyz(ii)/l(ii),rp)))
-                            else
-                                height(side,t)=amp_l(side,i)*(1._rp - &
-                                                cos(2._rp*pi*real(n_wave(side,i)*xyz(i)/l(i),rp))*&
-                                                cos(2._rp*pi*real(n_wave(side,ii)*xyz(ii)/l(ii),rp)))
-                            endif
-                        endif
-                    ! use hmap                
-                    else
-                         if(trim(hmap_mode)=="fit")then
-                            call get_hmap_loc(side,n1_hmap,n2_hmap,xyz(i),xyz(ii),l(i),l(ii),dl_hmap,i1,i2,r1,r2,w1,w2)
-                            ! Bilinear interpolation 
-                            height(side,t)=(hmap(i1(1),i2(2))*(w1(1))+hmap(i1(2),i2(2))*(w1(2)))*(w2(2))+&
-                                           (hmap(i1(1),i2(1))*(w1(1))+hmap(i1(2),i2(1))*(w1(2)))*(w2(1))
-                        elseif(trim(hmap_mode)=="normal")then
-                            ! here we need to change the shape of the hmap otherwise we will use different sized dl_hmap...
-                            call get_hmap_loc(side,n1_hmap,n2_hmap,xyz(i),xyz(ii),l1_hmap,l2_hmap,dl_hmap,i1,i2,r1,r2,w1,w2)
-                            ! Bilinear interpolation 
-                            height(side,t)=(hmap(i1(1),i2(2))*(w1(1))+hmap(i1(2),i2(2))*(w1(2)))*(w2(2))+&
-                                           (hmap(i1(1),i2(1))*(w1(1))+hmap(i1(2),i2(1))*(w1(2)))*(w2(1))
-                        else
-                            print*,"unknown hmap mode entered..."
-                            stop
-                        endif               
-                    endif
-                else
-                    height(side,t)=0._rp
-                endif
-            end do 
-        end do 
         isInBody=.false.
         do t = 1,3
+            i=modulo(t,3)+1
+            ii=modulo(t+1,3)+1
             if(ibm_direction(0,t))then
-                height(0,t)=l_0(0,t)+height(0,t)
-                if(xyz(t)<=height(0,t))then
+                if(xyz(t)<=wall_height(0,t,xyz(i),xyz(ii),amp_l,n_wave,l_0,phase_l,l,&
+                                       hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap))then
                     isInBody=.true.
                 endif
             endif
             if(ibm_direction(1,t))then
-                height(1,t)=l_0(1,t)-height(1,t)
-                if(xyz(t)>=height(1,t))then
+                if(xyz(t)>=wall_height(1,t,xyz(i),xyz(ii),amp_l,n_wave,l_0,phase_l,l,&
+                                       hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap))then
                     isInBody=.true.
                 endif
             endif   
         end do 
     end function isInbody
+    real(rp) function wall_height(side,t,x1,x2,amp_l,n_wave,l_0,phase_l,l,&
+                                  hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap) result(zw)
+        !
+        ! position, along direction t, of the IB wall on `side` (0: solid below, 1: solid above)
+        ! at the in-plane coordinates x1 (direction modulo(t,3)+1) and x2 (direction modulo(t+1,3)+1)
+        !
+        implicit none
+        integer , intent(in)                     :: side,t
+        real(rp), intent(in)                     :: x1,x2
+        real(rp), intent(in), dimension(0:1,3)   :: amp_l
+        integer , intent(in), dimension(0:1,3)   :: n_wave
+        real(rp), intent(in), dimension(0:1,3)   :: l_0
+        real(rp), intent(in), dimension(0:1,3)   :: phase_l
+        real(rp), intent(in), dimension(3)       :: l
+        real(rp),intent(in),optional             :: hmap(0:,0:)
+        real(rp),intent(in),optional             :: l1_hmap,l2_hmap 
+        integer,intent(in),optional              :: n1_hmap,n2_hmap
+        real(rp),parameter                       :: pi = 3.141592653589793_rp
+        real(rp)                                 :: height,loc1,loc2
+        integer                                  :: i,ii
+        real(rp)                                 :: dl_hmap(2)
+        integer                                  :: i1(2),i2(2)
+        real(rp)                                 :: r1(2),r2(2)
+        real(rp)                                 :: w1(2),w2(2)
+        i=modulo(t,3)+1
+        ii=modulo(t+1,3)+1
+        if(.not. use_hmap)then
+            select case(trim(ibm_shape))
+            case('sinusoid')
+                height=amp_l(side,i)*0.5_rp*(1._rp+sin(2._rp*pi*&
+                       real(n_wave(side,i)*x1/l(i),rp)+phase_l(side,i)))+&
+                       amp_l(side,ii)*0.5_rp*(1._rp+sin(2._rp*pi*&
+                       real(n_wave(side,ii)*x2/l(ii),rp)+phase_l(side,ii)))
+            case default ! 'macdonald'
+                if(side == 0)then
+                    height=amp_l(side,i)*(1._rp + &
+                           cos(2._rp*pi*real(n_wave(side,i)*x1/l(i),rp))*&
+                           cos(2._rp*pi*real(n_wave(side,ii)*x2/l(ii),rp)))
+                else
+                    height=amp_l(side,i)*(1._rp - &
+                           cos(2._rp*pi*real(n_wave(side,i)*x1/l(i),rp))*&
+                           cos(2._rp*pi*real(n_wave(side,ii)*x2/l(ii),rp)))
+                endif
+            end select
+        else
+            loc1=x1; loc2=x2 ! get_hmap_loc shifts them for side 1
+            if(trim(hmap_mode)=="fit")then
+                call get_hmap_loc(side,n1_hmap,n2_hmap,loc1,loc2,l(i),l(ii),dl_hmap,i1,i2,r1,r2,w1,w2)
+            elseif(trim(hmap_mode)=="normal")then
+                ! here we need to change the shape of the hmap otherwise we will use different sized dl_hmap...
+                call get_hmap_loc(side,n1_hmap,n2_hmap,loc1,loc2,l1_hmap,l2_hmap,dl_hmap,i1,i2,r1,r2,w1,w2)
+            else
+                print*,"unknown hmap mode entered..."
+                stop
+            endif
+            ! Bilinear interpolation 
+            height=(hmap(i1(1),i2(2))*(w1(1))+hmap(i1(2),i2(2))*(w1(2)))*(w2(2))+&
+                   (hmap(i1(1),i2(1))*(w1(1))+hmap(i1(2),i2(1))*(w1(2)))*(w2(1))
+        endif
+        if(side == 0)then
+            zw=l_0(0,t)+height
+        else
+            zw=l_0(1,t)-height
+        endif
+    end function wall_height
+    subroutine wall_height_range(ng,l,ibm_direction,amp_l,n_wave,l_0,phase_l,hmin,hmax,&
+                                 hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap)
+        !
+        ! range of the roughness height above the bottom wall (side 0) and below the top
+        ! wall (side 1) of the z-walls, sampled on a grid 4x finer than the mesh in x and y
+        !
+        implicit none
+        integer , intent(in), dimension(3)       :: ng
+        real(rp), intent(in), dimension(3)       :: l
+        logical , intent(in), dimension(0:1,3)   :: ibm_direction
+        real(rp), intent(in), dimension(0:1,3)   :: amp_l
+        integer , intent(in), dimension(0:1,3)   :: n_wave
+        real(rp), intent(in), dimension(0:1,3)   :: l_0
+        real(rp), intent(in), dimension(0:1,3)   :: phase_l
+        real(rp), intent(out)                    :: hmin,hmax
+        real(rp),intent(in),optional             :: hmap(0:,0:)
+        real(rp),intent(in),optional             :: l1_hmap,l2_hmap 
+        integer,intent(in),optional              :: n1_hmap,n2_hmap
+        integer , parameter                      :: nref = 4
+        integer                                  :: side,i,j
+        real(rp)                                 :: x,y,h
+        hmin = huge(1._rp); hmax = -huge(1._rp)
+        do side=0,1
+            if(.not.ibm_direction(side,3)) cycle
+            do j=1,nref*ng(2)
+                y = (j-1)*l(2)/(nref*ng(2)) ! fine-grid nodes: include the mesh faces and centres
+                do i=1,nref*ng(1)
+                    x = (i-1)*l(1)/(nref*ng(1))
+                    h = wall_height(side,3,x,y,amp_l,n_wave,l_0,phase_l,l,hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap)
+                    if(side == 1) h = l(3)-h
+                    hmin = min(hmin,h)
+                    hmax = max(hmax,h)
+                end do
+            end do
+        end do
+        if(hmax < hmin) then ! no z-wall
+            hmin = 0._rp; hmax = 0._rp
+        end if
+    end subroutine wall_height_range
     subroutine get_hmap_loc(side,n1_hmap,n2_hmap,loc_1,loc_2,&
                             l1_hmap,l2_hmap,dl_hmap,i1,i2,r1,r2,w1,w2)
         integer,intent(in)                              :: n1_hmap,n2_hmap

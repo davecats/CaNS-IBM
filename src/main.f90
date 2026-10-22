@@ -80,6 +80,7 @@ program cans
                                  amp_l,            &
                                  phase_l,          &
                                  bulk_vel_def,     &
+                                 ibm_hch,          &
                                  use_hmap,         &
                                  override_grid,     &
                                  hmap_name          
@@ -215,7 +216,7 @@ program cans
   real(rp) :: ibm_idx_off(12)
 !*******HMAP********!,
   !for init grid
-  real(rp)  :: hmax_g,hch_g,hmean_g,hmin_g
+  real(rp)  :: hmax_g,hch_g,hmin_g
 !******************!
   !
   call MPI_INIT(ierr)
@@ -317,20 +318,31 @@ program cans
   if(myid == 0) print*, '*** Beginning of simulation ***'
   if(myid == 0) print*, '*******************************'
   if(myid == 0) print*, ''
+  hmax_g=0._rp; hch_g=0._rp; hmin_g=0._rp
+  if(is_ibm)then
+    ! roughness height range of the z-walls, from the actual wall shape
+    call wall_height_range(ng,l,ibm_direction,amp_l,n_wave,l_0,phase_l,hmin_g,hmax_g, &
+                           hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha)
+    if(use_hmap .and. ibm_direction(0,3)) hmax_g = max(hmax_g,l_0(0,3)+hmap_max_tha) ! exact max of the bilinear map
+    if(myid==0)print*,"IBM roughness height range (z-walls): hmin, hmax = ",hmin_g,hmax_g
+  endif
   if(gtype/=5)then !5 is the rough wall IBM aware cluster two end function 
     call initgrid(gtype,ng(3),gr,l(3),dzc_g,dzf_g,zc_g,zf_g,cbcpre(0,3)//cbcpre(1,3) == 'PP')
   else
-    hmax_g=0._rp; hch_g=0._rp;hmean_g=0._rp;hmin_g=0._rp;
-    if(use_hmap)then
-      hmax_g=hmap_max_tha
-      hch_g=hch
+    if(ibm_hch > 0._rp)then
+      hch_g=ibm_hch
+    elseif(use_hmap)then
+      hch_g=hch ! from the height-map info file
     else
-      hmax_g=l_0(0,3)+max(max(0._rp,amp_l(0,1)),max(0._rp,amp_l(0,2)))
-      hmin_g=l_0(0,3)-max(max(0._rp,amp_l(0,1)),max(0._rp,amp_l(0,2)))
-      hmean_g=(hmax_g+hmin_g)/2._rp
-      hch_g=(l(3)/2._rp)-hmean_g
-      if(myid==0)print*,"hmax:,hmix:,hmean:,hch",hmax_g,hmin_g,hmean_g,hch_g
+      if(myid==0)print*,"ERROR: the rough-wall grid (gtype = 5) requires &ibm ibm_hch > 0."
+      call MPI_FINALIZE(ierr)
+      error stop
     endif
+    if(myid==0)print*,"rough-wall grid: hmax, hch = ",hmax_g,hch_g
+    if(myid==0 .and. hmax_g >= l(3)/2._rp) &
+      print*,"Warning: the roughness reaches the channel centre (hmax >= l(3)/2)."
+    if(myid==0 .and. hch_g > l(3)/2._rp) &
+      print*,"Warning: ibm_hch is larger than half the domain height."
     call initgrid(gtype,ng(3),gr,l(3),dzc_g,dzf_g,zc_g,zf_g,cbcpre(0,3)//cbcpre(1,3) == 'PP',&
                         visc,dzp_fine,dzp_coarse,hch_g,hmax_g,myid)
   endif

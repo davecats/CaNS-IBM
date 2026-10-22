@@ -19,7 +19,8 @@ module mod_sanity
   use mod_initmpi   , only: initmpi
   use mod_initsolver, only: initsolver
   use mod_param     , only: ipencil_axis,is_impdiff,is_impdiff_1d,is_poisson_pcr_tdma,small,adv_form, &
-                            is_ibm,ibm_2nd,nscal,cbcscal_ibm,bulk_vel_def
+                            is_ibm,ibm_2nd,nscal,cbcscal_ibm,bulk_vel_def, &
+                            ibm_shape,use_hmap,ibm_direction,amp_l,phase_l
 #if !defined(_OPENACC)
   use mod_solver    , only: solver
 #else
@@ -69,6 +70,25 @@ module mod_sanity
     end if
     if(is_ibm .and. is_impdiff) then
       if(myid == 0)  print*, 'Warning: with `is_impdiff = T` the implicit Helmholtz solve does not see the IBM staircase.'
+    end if
+    if(.not.any(trim(ibm_shape) == ['macdonald','sinusoid '])) then
+      if(myid == 0)  print*, 'ERROR: `ibm_shape` must be either `macdonald` or `sinusoid`.'; call abortit
+    end if
+    if(is_ibm .and. .not.use_hmap .and. trim(ibm_shape) == 'macdonald') then
+      block
+        integer :: side,t,i,ii
+        do side=0,1
+          do t=1,3
+            if(.not.ibm_direction(side,t)) cycle
+            i  = modulo(t  ,3)+1
+            ii = modulo(t+1,3)+1
+            if(amp_l(side,ii) /= 0._rp .or. any(phase_l(side,[i,ii]) /= 0._rp)) then
+              if(myid == 0) print*, 'Warning: `ibm_shape = ''macdonald''` uses only amp_l(side,i), i = mod(t,3)+1; &
+                                    &amp_l(side,ii) and phase_l are ignored, (side,t) = ', side,t
+            end if
+          end do
+        end do
+      end block
     end if
     if(.not.any(trim(bulk_vel_def) == ['superficial','intrinsic  '])) then
       if(myid == 0)  print*, 'ERROR: `bulk_vel_def` must be either `superficial` or `intrinsic`.'; call abortit
