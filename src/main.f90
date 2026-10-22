@@ -34,7 +34,7 @@ program cans
   use mod_chkdiv         , only: chkdiv
   use mod_chkdt          , only: chkdt
   use mod_common_mpi     , only: myid,ierr,dinfo_ptdma
-  use mod_correc         , only: correc
+  use mod_correc         , only: correc,correc_ibm
   use mod_fft            , only: fftini,fftend
   use mod_fillps         , only: fillps
   use mod_initflow       , only: initflow,initscal
@@ -81,6 +81,7 @@ program cans
                                  amp_l,            &
                                  phase_l,          &
                                  bulk_vel_def,     &
+                                 ibm_proj,         &
                                  ibm_hch,          &
                                  use_hmap,         &
                                  override_grid,     &
@@ -98,7 +99,7 @@ program cans
   use mod_updatep        , only: updatep
   use mod_utils          , only: bulk_mean,calc_mean_flow,&
                                  calc_mean_flow_easy,chk_ibm, &
-                                 bulk_mean_ibm,bulk_forcing_ibm,ibm_impulse
+                                 bulk_mean_ibm,bulk_forcing_ibm,ibm_impulse,ibm_impulse_proj
 #if defined(_OPENACC)
   use mod_utils          , only: device_memory_footprint
 #endif
@@ -835,7 +836,16 @@ program cans
       call updt_rhs_b(['c','c','c'],cbcpre,n,is_bound,rhsbp%x,rhsbp%y,rhsbp%z,pp)
       call solver(n,ng,arrplanp,normfftp,lambdaxyp,ap,bp,cp,cbcpre,['c','c','c'],pp,is_ptdma_update_p,ap_d,cp_d)
       call boundp(cbcpre,n,bcpre,nb,is_bound,dl,dzc,pp)
-      call correc(n,dli,dzci,dtrk,pp,u,v,w)
+      if(trim(ibm_proj) == 'damped') then
+        call correc_ibm(n,dli,dzci,dtrk,pp,mask_u,mask_v,mask_w,A_u,A_v,A_w,u,v,w)
+        if(is_ibm_force) then
+          call ibm_impulse_proj(1,n,lo,ng,dli,dzci,grid_vol_ratio_f,dtrk,mask_u,A_u,pp,imp_leak(:,:,1),imp_map(:,:,1))
+          call ibm_impulse_proj(2,n,lo,ng,dli,dzci,grid_vol_ratio_f,dtrk,mask_v,A_v,pp,imp_leak(:,:,2),imp_map(:,:,2))
+          call ibm_impulse_proj(3,n,lo,ng,dli,dzci,grid_vol_ratio_c,dtrk,mask_w,A_w,pp,imp_leak(:,:,3))
+        end if
+      else
+        call correc(n,dli,dzci,dtrk,pp,u,v,w)
+      end if
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.true.,dl,dzc,dzf,u,v,w)
       call updatep(n,dli,dzci,dzfi,alpha,pp,p)
       call boundp(cbcpre,n,bcpre,nb,is_bound,dl,dzc,p)
@@ -894,7 +904,7 @@ program cans
         call out0d(trim(datadir)//'ibm_chk.out',8,var)
       end if
       if(.not.is_mask_divergence_check) then
-        if(divmax > small.or.is_nan(divtot)) then
+        if((divmax > small.and.trim(ibm_proj) /= 'damped').or.is_nan(divtot)) then
           if(myid == 0) print*, 'ERROR: maximum divergence is too large.'
           if(myid == 0) print*, 'Aborting...'
           is_done = .true.
@@ -974,7 +984,12 @@ program cans
         var(14:16) = sum(imp_ibm(:,1,:),1)                       ! fluid (band) points, lambda term
         var(17:19) = sum(imp_ibm(:,2,:),1)                       ! solid points, predictor
         var(20:22) = sum(imp_leak(:,2,:),1)                      ! solid points, projection leakage
-        call out0d(trim(datadir)//'ibm_force.out',22,var)
+        if(trim(ibm_proj) == 'none') then
+          call out0d(trim(datadir)//'ibm_force.out',22,var)
+        else
+          var(23:25) = sum(imp_leak(:,1,:),1)                    ! fluid (band) points, damped correction
+          call out0d(trim(datadir)//'ibm_force.out',25,var)
+        end if
       end if
     end if
     write(fldnum,'(i7.7)') istep

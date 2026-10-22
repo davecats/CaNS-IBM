@@ -8,7 +8,7 @@ module mod_utils
   implicit none
   private
   public bulk_mean,f_sizeof,swap,calc_mean_flow,calc_mean_flow_easy,chk_ibm
-  public bulk_mean_ibm,bulk_forcing_ibm,ibm_impulse
+  public bulk_mean_ibm,bulk_forcing_ibm,ibm_impulse,ibm_impulse_proj
 #if defined(_OPENACC)
   public device_memory_footprint
 #endif
@@ -206,6 +206,82 @@ contains
     imp(:,1) = imp(:,1) + [imp_fb,imp_ft]
     imp(:,2) = imp(:,2) + [imp_sb,imp_st]
   end subroutine ibm_impulse
+  subroutine ibm_impulse_proj(idir,n,lo,ng,dli,dzci,grid_vol_ratio,fac,mask,a,phi,imp,map)
+    !
+    ! as `ibm_impulse`, for the damped correction (`ibm_proj = 'damped'`, see `correc_ibm`,
+    ! fac*phi = dt_rk*pp): the momentum the IB removes relative to the standard correction,
+    ! -fac*grad(phi)*(1-1/a) at the non-solid and -fac*grad(phi) at the solid points,
+    ! component idir; same splitting of imp and map as `ibm_impulse`
+    !
+    use mod_types
+    implicit none
+    integer , intent(in   )                      :: idir
+    integer , intent(in   ), dimension(3)        :: n,lo,ng
+    real(rp), intent(in   ), dimension(3)        :: dli
+    real(rp), intent(in   ), dimension(0:)       :: dzci,grid_vol_ratio
+    real(rp), intent(in   )                      :: fac
+    logical , intent(in   ), dimension(0:,0:,0:) :: mask
+    real(rp), intent(in   ), dimension(0:,0:,0:) :: a,phi
+    real(rp), intent(inout), dimension(2,2)      :: imp
+    real(rp), intent(inout), dimension(:,:), optional :: map
+    real(rp) :: imp_fb,imp_ft,imp_sb,imp_st,q
+    integer  :: i,j,k,kh,di,dj,dk
+    kh = ng(3)/2-lo(3)+1 ! last local k of the lower half
+    di = 0; dj = 0; dk = 0
+    select case(idir)
+    case(1)
+      di = 1
+    case(2)
+      dj = 1
+    case default
+      dk = 1
+    end select
+    imp_fb = 0.; imp_ft = 0.; imp_sb = 0.; imp_st = 0.
+    !$acc data copy(imp_fb,imp_ft,imp_sb,imp_st) async(1)
+    !$acc parallel loop collapse(3) default(present) private(q) &
+    !$acc reduction(+:imp_fb,imp_ft,imp_sb,imp_st) async(1)
+    !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)  PRIVATE(q) &
+    !$OMP REDUCTION(+:imp_fb,imp_ft,imp_sb,imp_st)
+    do k=1,n(3)
+      do j=1,n(2)
+        do i=1,n(1)
+          q = -fac*(phi(i+di,j+dj,k+dk)-phi(i,j,k))*(di*dli(1)+dj*dli(2)+dk*dzci(k))*grid_vol_ratio(k)
+          if(mask(i,j,k)) then
+            if(k <= kh) then
+              imp_sb = imp_sb + q
+            else
+              imp_st = imp_st + q
+            end if
+          else
+            q = q*(1.-1./a(i,j,k))
+            if(k <= kh) then
+              imp_fb = imp_fb + q
+            else
+              imp_ft = imp_ft + q
+            end if
+          end if
+        end do
+      end do
+    end do
+    !$acc end data
+    if(present(map)) then
+      !$acc parallel loop collapse(2) default(present) private(q) async(1)
+      !$OMP PARALLEL DO   COLLAPSE(2) DEFAULT(shared)  PRIVATE(q,k)
+      do j=1,n(2)
+        do i=1,n(1)
+          q = 0.
+          do k=1,min(kh,n(3))
+            q = q - fac*(phi(i+di,j+dj,k+dk)-phi(i,j,k))*(di*dli(1)+dj*dli(2)+dk*dzci(k))*grid_vol_ratio(k)* &
+                    merge(1._rp,1.-1./a(i,j,k),mask(i,j,k))
+          end do
+          map(i,j) = map(i,j) + q
+        end do
+      end do
+    end if
+    !$acc wait(1)
+    imp(:,1) = imp(:,1) + [imp_fb,imp_ft]
+    imp(:,2) = imp(:,2) + [imp_sb,imp_st]
+  end subroutine ibm_impulse_proj
   subroutine calc_mean_flow(grid_vol_ratio,mask_id,field_id,mean,n)
     !
     ! compute the mean value of an observable over the entire domain

@@ -129,6 +129,7 @@ real(rp), protected   :: phase_l(0:1,3)=0._rp
 character(len=16), protected :: ibm_shape = 'macdonald' ! analytic wall shape: 'macdonald' or 'sinusoid'
 real(rp), protected   :: ibm_hch = -1._rp ! reference half height for the rough-wall grid (gtype = 5)
 character(len=16), protected :: bulk_vel_def = 'superficial' ! IBM bulk velocity: 'superficial' or 'intrinsic'
+character(len=16), protected :: ibm_proj = 'none' ! IB-aware velocity correction: 'none' or 'damped'
 !hmap
 logical,protected     :: use_hmap=.false.
 character(len=25), protected :: hmap_mode="fit"
@@ -204,7 +205,8 @@ contains
                             phase_l,          &
                             ibm_shape,        &
                             ibm_hch,          &
-                            bulk_vel_def
+                            bulk_vel_def,     &
+                            ibm_proj
     namelist /hmap/ &
                             use_hmap,         &
                             hmap_mode,        &        

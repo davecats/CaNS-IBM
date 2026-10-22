@@ -20,7 +20,7 @@ module mod_sanity
   use mod_initsolver, only: initsolver
   use mod_param     , only: ipencil_axis,is_impdiff,is_impdiff_1d,is_poisson_pcr_tdma,small,adv_form, &
                             is_ibm,ibm_2nd,nscal,cbcscal_ibm,bulk_vel_def, &
-                            ibm_shape,use_hmap,ibm_direction,amp_l,phase_l
+                            ibm_shape,use_hmap,ibm_direction,amp_l,phase_l,ibm_proj
 #if !defined(_OPENACC)
   use mod_solver    , only: solver
 #else
@@ -92,6 +92,12 @@ module mod_sanity
     end if
     if(.not.any(trim(bulk_vel_def) == ['superficial','intrinsic  '])) then
       if(myid == 0)  print*, 'ERROR: `bulk_vel_def` must be either `superficial` or `intrinsic`.'; call abortit
+    end if
+    if(.not.any(trim(ibm_proj) == ['none  ','damped'])) then
+      if(myid == 0)  print*, 'ERROR: `ibm_proj` must be either `none` or `damped`.'; call abortit
+    end if
+    if(trim(ibm_proj) /= 'none' .and. .not.is_ibm) then
+      if(myid == 0)  print*, 'ERROR: `ibm_proj /= ''none''` requires `is_ibm = T`.'; call abortit
     end if
     if(is_ibm .and. nscal > 0) then
       if(any(cbcscal_ibm(1:nscal) /= 'D')) then
