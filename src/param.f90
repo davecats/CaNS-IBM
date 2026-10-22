@@ -21,6 +21,7 @@ real(rp), parameter :: eps = epsilon(1._rp)
 real(rp), parameter :: eps = 0._rp
 #endif
 real(rp), parameter :: small = epsilon(1._rp)*10**(precision(1._rp)/2)
+real(rp), parameter :: ibm_pen = 1._rp/epsilon(1._rp) ! solid-point penalty of the z-implicit IBM solve
 character(len=100), parameter :: datadir = 'data/'
 real(rp), parameter, dimension(2,3) :: rkcoeff = reshape([32._rp/60._rp,  0._rp        , &
                                                           25._rp/60._rp, -17._rp/60._rp, &
@@ -76,7 +77,8 @@ character(len=100), protected, allocatable, dimension(:)     :: iniscal
 character(len=1)  , protected, allocatable, dimension(:,:,:) :: cbcscal ! size (0:1,3,nscal)
 real(rp)          , protected, allocatable, dimension(:,:,:) ::  bcscal ! size (0:1,3,nscal)
 real(rp), protected, allocatable, dimension(:) :: ssource
-logical,protected :: const_scal
+logical,protected :: const_scal ! if false, the mean-gradient source -u*scal_mean_grad is added
+real(rp), protected, allocatable, dimension(:) :: scal_mean_grad
 logical , protected, allocatable, dimension(:) :: is_sforced
 real(rp), protected, allocatable, dimension(:) :: scalf
 logical , protected :: is_boussinesq_buoyancy = .false.
@@ -109,6 +111,7 @@ logical, protected :: is_impdiff = .false., is_impdiff_1d = .false., &
                       is_poisson_pcr_tdma = .false., &
                       is_fast_mom_kernels = .true., &
                       is_gridpoint_natural_channel = .false.
+character(len=3), protected :: adv_form = 'vv' ! advection form: 'vv' (skew-symmetric, Verstappen & Veldman) or 'div' (divergence)
 !
 ! i/o backend parameters
 !
@@ -124,6 +127,10 @@ real(rp), protected   :: l_0(0:1,3)=0._rp
 integer, protected    :: n_wave(0:1,3)=0._rp
 real(rp), protected   :: amp_l(0:1,3)=0._rp
 real(rp), protected   :: phase_l(0:1,3)=0._rp
+character(len=16), protected :: ibm_shape = 'macdonald' ! analytic wall shape: 'macdonald' or 'sinusoid'
+real(rp), protected   :: ibm_hch = -1._rp ! reference half height for the rough-wall grid (gtype = 5)
+character(len=16), protected :: bulk_vel_def = 'superficial' ! IBM bulk velocity: 'superficial' or 'intrinsic'
+character(len=16), protected :: ibm_proj = 'none' ! IB-aware velocity correction: 'none' or 'damped'
 !hmap
 logical,protected     :: use_hmap=.false.
 character(len=25), protected :: hmap_mode="fit"
@@ -173,7 +180,7 @@ contains
                      iniscal, &
                      cbcscal,bcscal, &
                      cbcscal_ibm,bcscal_ibm,&
-                     const_scal,&
+                     const_scal,scal_mean_grad,&
                      ssource, &
                      is_sforced, &
                      scalf, &
@@ -182,7 +189,8 @@ contains
                        is_impdiff,is_impdiff_1d, &
                        is_poisson_pcr_tdma, &
                        is_fast_mom_kernels, &
-                       is_gridpoint_natural_channel
+                       is_gridpoint_natural_channel, &
+                       adv_form
     namelist /other_options/ &
                             is_debug,is_debug_poisson, &
                             is_timing, &
@@ -195,7 +203,11 @@ contains
                             l_0,              &
                             n_wave,           &
                             amp_l,            &
-                            phase_l
+                            phase_l,          &
+                            ibm_shape,        &
+                            ibm_hch,          &
+                            bulk_vel_def,     &
+                            ibm_proj
     namelist /hmap/ &
                             use_hmap,         &
                             hmap_mode,        &        
@@ -329,7 +341,7 @@ contains
         allocate(alphai(nscal),iniscal(nscal), &
                  cbcscal(0:1,3,nscal),bcscal(0:1,3,nscal), &
                  cbcscal_ibm(nscal),bcscal_ibm(nscal),&
-                 ssource(nscal),is_sforced(nscal),scalf(nscal))
+                 ssource(nscal),is_sforced(nscal),scalf(nscal),scal_mean_grad(nscal))
         !
         ! set default values
         !
@@ -339,6 +351,8 @@ contains
         scalf(:)      = 0.
         cbcscal_ibm(:) = "D"
         bcscal_ibm(:)  = 0._rp
+        const_scal     = .true.
+        scal_mean_grad(:) = -1._rp
         !
         ! read `scalar` namelist
         !
@@ -444,6 +458,7 @@ contains
         close(iunit)
         error stop
       end if
+    rewind(iunit)
     !
     ! read hmap namelist
     !

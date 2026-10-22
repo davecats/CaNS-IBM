@@ -17,16 +17,18 @@ module mod_rk
                        momx_d_xy,momy_d_xy,momz_d_xy, &
                        momx_d_z ,momy_d_z ,momz_d_z, &
                        mom_xyz_ad
-  use mod_param, only: is_impdiff,is_impdiff_1d,is_boussinesq_buoyancy,is_fast_mom_kernels,ibm_2nd,is_ibm,const_scal
+  use mod_param, only: is_impdiff,is_impdiff_1d,is_boussinesq_buoyancy,is_fast_mom_kernels,ibm_2nd,is_ibm,const_scal, &
+                       adv_form,bulk_vel_def
   use mod_scal , only: scal,cmpt_scalflux,scalar
-  use mod_utils, only: bulk_mean
+  use mod_utils, only: bulk_mean,bulk_mean_ibm
   use mod_types
   implicit none
   public rk,rk_scal
   contains
   subroutine rk(rkpar,n,dli,dzci,dzfi,grid_vol_ratio_c,grid_vol_ratio_f,dt,visc,p, &
                 is_forced,velf,bforce,gacc,beta,scalars,dudtrko,dvdtrko,dwdtrko,u,v,w,f,&
-                A_u,A_v,A_w,B_u,B_v,B_w)!2ndIBM additions
+                A_u,A_v,A_w,B_u,B_v,B_w, &!2ndIBM additions
+                mask_u,mask_v,mask_w)
 #if defined(_OPENACC)
     use mod_common_cudecomp, only: dudtrk_t => work, &
                                    dvdtrk_t => solver_buf_0, &
@@ -69,6 +71,7 @@ module mod_rk
     real(rp),intent(in) :: B_u(0:,0:,0:)
     real(rp),intent(in) :: B_v(0:,0:,0:)
     real(rp),intent(in) :: B_w(0:,0:,0:)
+    logical ,intent(in), dimension(0:,0:,0:), optional :: mask_u,mask_v,mask_w ! present if is_ibm
     !
     factor1 = rkpar(1)*dt
     factor2 = rkpar(2)*dt
@@ -158,7 +161,7 @@ module mod_rk
           call momz_d_z( n(1),n(2),n(3),dzci  ,dzfi  ,visc,w,dwdtrkd)
         end if
       end if
-      if(is_ibm)then
+      if(trim(adv_form) == 'div') then
         call momx_a(n(1),n(2),n(3),dli(1),dli(2),dzfi,u,v,w,dudtrk)
         call momy_a(n(1),n(2),n(3),dli(1),dli(2),dzfi,u,v,w,dvdtrk)
         call momz_a(n(1),n(2),n(3),dli(1),dli(2),dzci,u,v,w,dwdtrk)
@@ -166,8 +169,8 @@ module mod_rk
         call momx_a_vv(n(1),n(2),n(3),dli(1),dli(2),dzfi,u,v,w,dudtrk)
         call momy_a_vv(n(1),n(2),n(3),dli(1),dli(2),dzfi,u,v,w,dvdtrk)
         call momz_a_vv(n(1),n(2),n(3),dli(1),dli(2),dzci,dzfi,u,v,w,dwdtrk)
+      end if
     end if
-  endif
     !
 #if !defined(_LOOP_UNSWITCHING)
     !$acc parallel loop collapse(3) default(present) async(1)
@@ -221,9 +224,15 @@ module mod_rk
           endif
           !
           if(is_impdiff) then
-            u(i,j,k) = u(i,j,k) + factor12*dudtrkd(i,j,k)
-            v(i,j,k) = v(i,j,k) + factor12*dvdtrkd(i,j,k)
-            w(i,j,k) = w(i,j,k) + factor12*dwdtrkd(i,j,k)
+            if(.not.ibm_2nd)then
+              u(i,j,k) = u(i,j,k) + factor12*dudtrkd(i,j,k)
+              v(i,j,k) = v(i,j,k) + factor12*dvdtrkd(i,j,k)
+              w(i,j,k) = w(i,j,k) + factor12*dwdtrkd(i,j,k)
+            else
+              u(i,j,k) = u(i,j,k) + factor12*dudtrkd(i,j,k)/A_u(i,j,k)
+              v(i,j,k) = v(i,j,k) + factor12*dvdtrkd(i,j,k)/A_v(i,j,k)
+              w(i,j,k) = w(i,j,k) + factor12*dwdtrkd(i,j,k)/A_w(i,j,k)
+            endif
           end if
         end do
       end do
@@ -291,24 +300,24 @@ module mod_rk
           do i=1,n(1)
             if(.not.ibm_2nd)then
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
-                                  factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k))) &
-                                          - gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k))
+                                  factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)) &
+                                          - gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k)))
             v(i,j,k) = v(i,j,k) + factor1*dvdtrk(i,j,k) + factor2*dvdtrko(i,j,k) + &
-                                  factor12*(bforce(2) - dli(2)*(p(i,j+1,k)-p(i,j,k))) &
-                                          - gacc(2)*beta*0.5*(s(i,j+1,k)+s(i,j,k))
+                                  factor12*(bforce(2) - dli(2)*(p(i,j+1,k)-p(i,j,k)) &
+                                          - gacc(2)*beta*0.5*(s(i,j+1,k)+s(i,j,k)))
             w(i,j,k) = w(i,j,k) + factor1*dwdtrk(i,j,k) + factor2*dwdtrko(i,j,k) + &
-                                  factor12*(bforce(3) - dzci(k)*(p(i,j,k+1)-p(i,j,k))) &
-                                          - gacc(3)*beta*0.5*(s(i,j,k+1)+s(i,j,k))
+                                  factor12*(bforce(3) - dzci(k)*(p(i,j,k+1)-p(i,j,k)) &
+                                          - gacc(3)*beta*0.5*(s(i,j,k+1)+s(i,j,k)))
             else
                 u(i,j,k) = (B_u(i,j,k)*u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
-                                      factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k))) &
-                                              - gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k)))/A_u(i,j,k)
+                                      factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)) &
+                                              - gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k))))/A_u(i,j,k)
                 v(i,j,k) = (B_v(i,j,k)*v(i,j,k) + factor1*dvdtrk(i,j,k) + factor2*dvdtrko(i,j,k) + &
-                                      factor12*(bforce(2) - dli(2)*(p(i,j+1,k)-p(i,j,k))) &
-                                              - gacc(2)*beta*0.5*(s(i,j+1,k)+s(i,j,k)))/A_v(i,j,k)
+                                      factor12*(bforce(2) - dli(2)*(p(i,j+1,k)-p(i,j,k)) &
+                                              - gacc(2)*beta*0.5*(s(i,j+1,k)+s(i,j,k))))/A_v(i,j,k)
                 w(i,j,k) = (B_w(i,j,k)*w(i,j,k) + factor1*dwdtrk(i,j,k) + factor2*dwdtrko(i,j,k) + &
-                                      factor12*(bforce(3) - dzci(k)*(p(i,j,k+1)-p(i,j,k))) &
-                                              - gacc(3)*beta*0.5*(s(i,j,k+1)+s(i,j,k)))/A_w(i,j,k)
+                                      factor12*(bforce(3) - dzci(k)*(p(i,j,k+1)-p(i,j,k)) &
+                                              - gacc(3)*beta*0.5*(s(i,j,k+1)+s(i,j,k))))/A_w(i,j,k)
             endif
           end do
         end do
@@ -396,28 +405,48 @@ module mod_rk
     !
     ! compute bulk velocity forcing
     !
-    call cmpt_bulk_forcing(n,is_forced,velf,grid_vol_ratio_c,grid_vol_ratio_f,u,v,w,f)
+    if(is_ibm) then
+      call cmpt_bulk_forcing_ibm(n,is_forced,velf,grid_vol_ratio_c,grid_vol_ratio_f, &
+                                 mask_u,mask_v,mask_w,A_u,A_v,A_w,u,v,w,f)
+    else
+      call cmpt_bulk_forcing(n,is_forced,velf,grid_vol_ratio_c,grid_vol_ratio_f,u,v,w,f)
+    end if
     !
     if(is_impdiff) then
       !
       ! compute rhs of Helmholtz equation
+      ! (with ibm_2nd: rhs/A, as `solve_helmholtz_ibm` multiplies it by A)
       !
-      !$acc parallel loop collapse(3) default(present) async(1)
-      !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
-      do k=1,n(3)
-        do j=1,n(2)
-          do i=1,n(1)
-            u(i,j,k) = u(i,j,k) - .5_rp*factor12*dudtrkd(i,j,k)
-            v(i,j,k) = v(i,j,k) - .5_rp*factor12*dvdtrkd(i,j,k)
-            w(i,j,k) = w(i,j,k) - .5_rp*factor12*dwdtrkd(i,j,k)
+      if(.not.ibm_2nd) then
+        !$acc parallel loop collapse(3) default(present) async(1)
+        !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
+        do k=1,n(3)
+          do j=1,n(2)
+            do i=1,n(1)
+              u(i,j,k) = u(i,j,k) - .5_rp*factor12*dudtrkd(i,j,k)
+              v(i,j,k) = v(i,j,k) - .5_rp*factor12*dvdtrkd(i,j,k)
+              w(i,j,k) = w(i,j,k) - .5_rp*factor12*dwdtrkd(i,j,k)
+            end do
           end do
         end do
-      end do
+      else
+        !$acc parallel loop collapse(3) default(present) async(1)
+        !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
+        do k=1,n(3)
+          do j=1,n(2)
+            do i=1,n(1)
+              u(i,j,k) = u(i,j,k) - .5_rp*factor12*dudtrkd(i,j,k)/A_u(i,j,k)
+              v(i,j,k) = v(i,j,k) - .5_rp*factor12*dvdtrkd(i,j,k)/A_v(i,j,k)
+              w(i,j,k) = w(i,j,k) - .5_rp*factor12*dwdtrkd(i,j,k)/A_w(i,j,k)
+            end do
+          end do
+        end do
+      end if
     end if
   end subroutine rk
   !
   subroutine rk_scal(rkpar,n,dli,l,dzci,dzfi,grid_vol_ratio_f,alpha,dt,is_bound,u,v,w, &
-                     is_forced,scalf,ssource,fluxo,dsdtrko,s,f,A_s,B_s)
+                     is_forced,scalf,ssource,fluxo,dsdtrko,s,f,A_s,B_s,sw,sgrad,mask_s)
 #if defined(_OPENACC)
     use mod_common_cudecomp, only: dsdtrk_t => work
 #endif
@@ -455,7 +484,10 @@ module mod_rk
     real(rp) :: mean
     real(rp),intent(in) :: A_s(0:,0:,0:)
     real(rp),intent(in) :: B_s(0:,0:,0:)
-    real(rp),parameter  :: tg=-1._rp ! temp grad ! we normalize the dT/dx = -1 for the MacDondald...
+    real(rp),intent(in) :: sw ! IBM wall value; the IB term relaxes s - sw, hence the (A_s-B_s)*sw term
+    real(rp),intent(in) :: sgrad ! imposed mean streamwise gradient (used if .not.const_scal)
+    logical ,intent(in), dimension(0:,0:,0:), optional :: mask_s ! present if is_ibm
+    real(rp) :: gain
     !
     factor1 = rkpar(1)*dt
     factor2 = rkpar(2)*dt
@@ -495,20 +527,31 @@ module mod_rk
 #endif
     !
     call scal(n(1),n(2),n(3),dli(1),dli(2),dzci,dzfi,alpha,u,v,w,s,dsdtrk,dsdtrkd)
+    if(.not.const_scal) then
+      !
+      ! advection of the imposed mean gradient, -u*sgrad: part of the explicit rhs,
+      ! so that it gets the same RK weights as the advection term
+      !
+      !$acc parallel loop collapse(3) default(present) async(1)
+      !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
+      do k=1,n(3)
+        do j=1,n(2)
+          do i=1,n(1)
+            dsdtrk(i,j,k) = dsdtrk(i,j,k) - sgrad*.5_rp*(u(i,j,k)+u(i-1,j,k))
+          end do
+        end do
+      end do
+    end if
 #if !defined(_LOOP_UNSWITCHING)
     !$acc parallel loop collapse(3) default(present) async(1)
     !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
     do k=1,n(3)
       do j=1,n(2)
         do i=1,n(1)
-          if(const_scal)then
-            s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) + factor12*ssource)/A_s(i,j,k)
-          else
-            s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k)&
-                        + factor12*(.5_rp*-tg*(u(i,j,k)+u(i-1,j,k))))/A_s(i,j,k)
-          endif
+          s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + (A_s(i,j,k)-B_s(i,j,k))*sw + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) &
+                      + factor12*ssource)/A_s(i,j,k)
           if(is_impdiff) then
-            s(i,j,k) = s(i,j,k) + factor12*dsdtrkd(i,j,k)
+            s(i,j,k) = s(i,j,k) + factor12*dsdtrkd(i,j,k)/A_s(i,j,k)
           end if
         end do
       end do
@@ -520,12 +563,8 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            if(const_scal)then
-              s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) + factor12*ssource)/A_s(i,j,k)
-            else
-              s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) &
-                                              + factor12*(.5_rp*-tg*(u(i,j,k)+u(i-1,j,k))))/A_s(i,j,k)
-            endif
+            s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + (A_s(i,j,k)-B_s(i,j,k))*sw + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) &
+                                            + factor12*ssource)/A_s(i,j,k)
           end do
         end do
       end do
@@ -535,13 +574,8 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            if(const_scal)then
-              s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) + &
-                                  factor12*(ssource + dsdtrkd(i,j,k)))/A_s(i,j,k)
-            else
-              s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) + &
-                                  factor12*(.5_rp*-tg*(u(i,j,k)+u(i-1,j,k)) + dsdtrkd(i,j,k)))/A_s(i,j,k)
-            endif
+            s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + (A_s(i,j,k)-B_s(i,j,k))*sw + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) + &
+                                factor12*(ssource + dsdtrkd(i,j,k)))/A_s(i,j,k)
           end do
         end do
       end do
@@ -560,8 +594,13 @@ module mod_rk
     ! bulk scalar forcing
     !
     if(is_forced) then
-      call bulk_mean(n,grid_vol_ratio_f,s(:,:,:),mean)
-      f = scalf - mean
+      if(is_ibm) then
+        call bulk_mean_ibm(n,grid_vol_ratio_f,mask_s,A_s,s(:,:,:),trim(bulk_vel_def) == 'intrinsic',mean,gain)
+        f = (scalf - mean)/gain
+      else
+        call bulk_mean(n,grid_vol_ratio_f,s(:,:,:),mean)
+        f = scalf - mean
+      end if
     end if
     if(is_impdiff) then
       !
@@ -572,7 +611,7 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            s(i,j,k) = s(i,j,k) - .5_rp*factor12*dsdtrkd(i,j,k)
+            s(i,j,k) = s(i,j,k) - .5_rp*factor12*dsdtrkd(i,j,k)/A_s(i,j,k) ! rhs/A (A = 1 without ibm_2nd)
           end do
         end do
       end do
@@ -618,6 +657,41 @@ module mod_rk
       f(3) = velf(3) - mean
     end if
   end subroutine cmpt_bulk_forcing
+  !
+  subroutine cmpt_bulk_forcing_ibm(n,is_forced,velf,grid_vol_ratio_c,grid_vol_ratio_f, &
+                                   mask_u,mask_v,mask_w,A_u,A_v,A_w,u,v,w,f)
+    !
+    ! IBM-aware bulk velocity forcing: the impulse f, added as f/A at the fluid points
+    ! (`bulk_forcing_ibm`), brings the fluid-only bulk velocity exactly to velf;
+    ! the solid points, zeroed afterwards, are excluded from the mean
+    !
+    implicit none
+    integer , intent(in   ), dimension(3) :: n
+    logical , intent(in   ), dimension(3) :: is_forced
+    real(rp), intent(in   ), dimension(3) :: velf
+    real(rp), intent(in   ), dimension(0:) :: grid_vol_ratio_c,grid_vol_ratio_f
+    logical , intent(in   ), dimension(0:,0:,0:) :: mask_u,mask_v,mask_w
+    real(rp), intent(in   ), dimension(0:,0:,0:) :: A_u,A_v,A_w
+    real(rp), intent(in   ), dimension(0:,0:,0:) :: u,v,w
+    real(rp), intent(out  ), dimension(3) :: f
+    real(rp) :: mean,gain
+    logical  :: is_intrinsic
+    !
+    is_intrinsic = trim(bulk_vel_def) == 'intrinsic'
+    f(:) = 0.
+    if(is_forced(1)) then
+      call bulk_mean_ibm(n,grid_vol_ratio_f,mask_u,A_u,u,is_intrinsic,mean,gain)
+      f(1) = (velf(1) - mean)/gain
+    end if
+    if(is_forced(2)) then
+      call bulk_mean_ibm(n,grid_vol_ratio_f,mask_v,A_v,v,is_intrinsic,mean,gain)
+      f(2) = (velf(2) - mean)/gain
+    end if
+    if(is_forced(3)) then
+      call bulk_mean_ibm(n,grid_vol_ratio_c,mask_w,A_w,w,is_intrinsic,mean,gain)
+      f(3) = (velf(3) - mean)/gain
+    end if
+  end subroutine cmpt_bulk_forcing_ibm
   !
   subroutine cmpt_bulk_forcing_alternative(rkpar,n,dli,l,dzci,dzfi,dt,visc,is_bound,is_forced,u,v,w,tauxo,tauyo,tauzo,f,is_first)
     !
@@ -694,22 +768,27 @@ module mod_rk
     real(rp),intent(inout),dimension(0:,0:,0:)  :: B_id
     real(rp),intent(in)                         :: dt_loop,visc
     real(rp), intent(in),dimension(3)           :: dl
-    real(rp)                                    :: ksi_l,e_l,dt_visc,eps
-    integer                                     :: i,j,k,cnt
+    real(rp)                                    :: ksi_l,e_l,dt_visc
+    real(rp), parameter                         :: ksi_small = 1.e-3_rp, ksi_large = 50._rp
+    integer                                     :: i,j,k
     dt_visc = dt_loop*visc
-    eps=1e-10_rp
     !$acc parallel loop collapse(3) default(present) private(ksi_l,e_l) async(1)
-    !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
+    !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared) PRIVATE(ksi_l,e_l)
     do k=lbound(laplacian_id,3),ubound(laplacian_id,3)
       do j=lbound(laplacian_id,2),ubound(laplacian_id,2)
         do i=lbound(laplacian_id,1),ubound(laplacian_id,1)
           ksi_l=laplacian_id(i,j,k)*dt_visc
-          e_l=exp(ksi_l)-1._rp
-          if(e_l>eps)then
-            B_id(i,j,k)=ksi_l/e_l
-          else
+          ! B = ksi/(exp(ksi)-1): Taylor series for small ksi (avoids the cancellation
+          ! in exp(ksi)-1), exp(-ksi) form for large ksi (avoids the overflow)
+          if(ksi_l<ksi_small)then
             B_id(i,j,k)=1._rp/(1._rp+ksi_l/2._rp+&
                               ksi_l**2/6._rp+ksi_l**3/24._rp)
+          elseif(ksi_l<=ksi_large)then
+            e_l=exp(ksi_l)-1._rp
+            B_id(i,j,k)=ksi_l/e_l
+          else
+            e_l=exp(-ksi_l)
+            B_id(i,j,k)=ksi_l*e_l/(1._rp-e_l)
           endif
           A_id(i,j,k)=ksi_l+B_id(i,j,k)
         end do

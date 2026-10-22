@@ -18,7 +18,9 @@ module mod_sanity
   use mod_initflow  , only: add_noise
   use mod_initmpi   , only: initmpi
   use mod_initsolver, only: initsolver
-  use mod_param     , only: ipencil_axis,is_impdiff,is_impdiff_1d,is_poisson_pcr_tdma,small
+  use mod_param     , only: ipencil_axis,is_impdiff,is_impdiff_1d,is_poisson_pcr_tdma,small,adv_form, &
+                            is_ibm,ibm_2nd,nscal,cbcscal_ibm,bulk_vel_def, &
+                            ibm_shape,use_hmap,ibm_direction,amp_l,phase_l,ibm_proj
 #if !defined(_OPENACC)
   use mod_solver    , only: solver
 #else
@@ -59,6 +61,51 @@ module mod_sanity
     end if
     if(is_poisson_pcr_tdma .and. (ipencil_axis == 3)) then
       if(myid == 0)  print*, 'ERROR: `is_poisson_pcr_tdma = T` requires X/Y-aligned pencils.'; call abortit
+    end if
+    if(.not.any(trim(adv_form) == ['vv ','div'])) then
+      if(myid == 0)  print*, 'ERROR: `adv_form` must be either `vv` or `div`.'; call abortit
+    end if
+    if(ibm_2nd .and. is_impdiff .and. .not.is_impdiff_1d) then
+      if(myid == 0)  print*, 'ERROR: `ibm_2nd = T` with implicit diffusion requires `is_impdiff_1d = T` &
+                             &(the 3D FFT-based Helmholtz solver cannot hold the IB term).'; call abortit
+    end if
+    if(is_ibm .and. is_impdiff .and. .not.is_impdiff_1d) then
+      if(myid == 0)  print*, 'Warning: with `is_impdiff = T`, `is_impdiff_1d = F` the implicit Helmholtz solve &
+                             &does not see the IBM staircase.'
+    end if
+    if(.not.any(trim(ibm_shape) == ['macdonald','sinusoid '])) then
+      if(myid == 0)  print*, 'ERROR: `ibm_shape` must be either `macdonald` or `sinusoid`.'; call abortit
+    end if
+    if(is_ibm .and. .not.use_hmap .and. trim(ibm_shape) == 'macdonald') then
+      block
+        integer :: side,t,i,ii
+        do side=0,1
+          do t=1,3
+            if(.not.ibm_direction(side,t)) cycle
+            i  = modulo(t  ,3)+1
+            ii = modulo(t+1,3)+1
+            if(amp_l(side,ii) /= 0._rp .or. any(phase_l(side,[i,ii]) /= 0._rp)) then
+              if(myid == 0) print*, 'Warning: `ibm_shape = ''macdonald''` uses only amp_l(side,i), i = mod(t,3)+1; &
+                                    &amp_l(side,ii) and phase_l are ignored, (side,t) = ', side,t
+            end if
+          end do
+        end do
+      end block
+    end if
+    if(.not.any(trim(bulk_vel_def) == ['superficial','intrinsic  '])) then
+      if(myid == 0)  print*, 'ERROR: `bulk_vel_def` must be either `superficial` or `intrinsic`.'; call abortit
+    end if
+    if(.not.any(trim(ibm_proj) == ['none  ','damped'])) then
+      if(myid == 0)  print*, 'ERROR: `ibm_proj` must be either `none` or `damped`.'; call abortit
+    end if
+    if(trim(ibm_proj) /= 'none' .and. .not.is_ibm) then
+      if(myid == 0)  print*, 'ERROR: `ibm_proj /= ''none''` requires `is_ibm = T`.'; call abortit
+    end if
+    if(is_ibm .and. nscal > 0) then
+      if(any(cbcscal_ibm(1:nscal) /= 'D')) then
+        if(myid == 0)  print*, 'ERROR: only Dirichlet IBM scalar boundary conditions are supported &
+                                       &(`cbcscal_ibm = ''D''`).'; call abortit
+      end if
     end if
   end subroutine test_sanity_input
   !

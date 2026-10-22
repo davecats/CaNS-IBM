@@ -205,6 +205,8 @@ These lines set the flow forcing.
 
 `velf` is the **target bulk velocity** in the direction in question (where `is_forced` is true). The three values correspond to the three domain directions.
 
+With the immersed-boundary method (`&ibm is_ibm = T`), the bulk velocity is the mean over the fluid points only, and the forcing impulse is added as the exact IB scheme integrates it (divided by the IB coefficient `A` near the wall, and not at all at the solid points), so the fluid bulk velocity matches `velf` exactly before the pressure projection. `&ibm bulk_vel_def` selects the normalization: `'superficial'` (default; divided by the box volume) or `'intrinsic'` (divided by the fluid volume). The same applies to `scalf` for the scalars. The output `forcing.out` reports this fluid-only mean.
+
 ---
 
 ```fortran
@@ -332,6 +334,12 @@ These lines set the **scalar forcing**.
 
 `scalf` is an array of size `nscal` defining **the target bulk mean** for each scalar (where `is_sforced` is true; analogous to `velf` in momentum).
 
+```fortran
+const_scal        = T
+scal_mean_grad(1) = -1.
+```
+If `const_scal` is false (default true), each scalar `s` is the fluctuation about an imposed mean streamwise gradient, `S = scal_mean_grad*x + s`, and the advection of that mean gradient, `-u*scal_mean_grad`, is added to the right-hand side of the scalar equation (together with `ssource`). It is part of the explicit right-hand side, so it is integrated with the same Runge-Kutta weights as the advection term. `scal_mean_grad` is an array of size `nscal`, default `-1.`.
+
 ---
 
 **Buoyancy effects**
@@ -356,6 +364,7 @@ This namelist defines parameters related to the numerical discretization and com
 &numerics
 is_impdiff = F, is_impdiff_1d = F
 is_poisson_pcr_tdma = F
+adv_form = 'vv'
 /
 ```
 
@@ -363,8 +372,48 @@ In these lines, `is_impdiff` and `is_impdiff_1d` enable the (semi-) **implicit t
 
 * `is_impdiff`, if `.true.`, the diffusion term of the Navier-Stokes and scalar equations is integrated in time implicitly, which may improve the stability of the numerical algorithm for viscous-dominated flows.
 * `is_impdiff_1d` is similar to `is_impdiff`, but with implicit diffusion *only* along Z, which may be advantageous when the grid along Z is much finer than along the other directions; *for optimal parallel performance, the domain should not be decomposed along Z* (`ipencil_axis=3`, or `ipencil_axis = 1/2` with `dims(2) = 1`)
+* With the IBM (`&ibm is_ibm = T`), implicit diffusion is supported only with `is_impdiff_1d = T`. Each Z column is then solved directly, with the IB inside the operator: the solid points are held at the wall value by a penalty, and with `ibm_2nd = T` the IB term keeps its exact (exponential) time integration, while the Z diffusion is Crank-Nicolson. This requires a domain that is not decomposed along Z (`ipencil_axis = 3`, or `dims(2) = 1`) and non-periodic Z boundaries. The steady state is the same as with explicit diffusion. `ibm_force.out` stays exact, but the IBM bulk forcing no longer sets the bulk velocity exactly, because the forcing is applied before the implicit solve (as without the IBM). With `is_impdiff = T, is_impdiff_1d = F` the 3D FFT-based solve cannot include the IB: `ibm_2nd = T` is rejected, and the staircase IBM only gives a warning.
 
 Finally, `is_poisson_pcr_tdma`, if `.true.`, allows for solving the Poisson/Helmholtz equations along Z with a parallel cyclic reduction--tridiagonal matrix algorithm (PCR-TDMA) method. This approach may result in major gains in scalability for pencil-distributed simulations at scale, on many GPUs.
+
+`adv_form` selects the **discretization of the advection term** of the momentum equation, both in the separate and in the fused (`is_fast_mom_kernels = T`) kernels:
+
+* `'vv'` (default): skew-symmetric form of Verstappen & Veldman; it conserves kinetic energy also on non-uniform grids, provided the velocity field is discretely divergence-free.
+* `'div'`: divergence (flux) form; it conserves momentum in the strict flux sense also where the discrete divergence is not zero (e.g., in near-wall cells with the immersed-boundary method), but it is not energy-conserving on a grid stretched along Z.
+
+The two forms differ only by the term `u*div(u)/2`, so they coincide for a discretely divergence-free field. Before this option existed, `is_ibm = T` forced `'div'` when `is_fast_mom_kernels = F`.
+
+# About the `&ibm` namelist under `input.nml` (selected entries)
+
+```fortran
+&ibm
+ibm_shape    = 'macdonald'
+ibm_hch      = -1.
+bulk_vel_def = 'superficial'
+ibm_proj     = 'none'
+/
+```
+`ibm_shape` selects the analytic wall shape (with `&hmap use_hmap = F`). For a wall normal to direction `t` on side `s` (`ibm_direction(s,t) = T`), with in-plane directions `i = mod(t,3)+1` and `ii = mod(t+1,3)+1`, and the bottom wall at `l_0(0,t) + h`, the top wall at `l_0(1,t) - h`:
+* `'macdonald'` (default): `h = amp_l(s,i)*(1 +/- cos(2 pi n_wave(s,i) x_i/l_i)*cos(2 pi n_wave(s,ii) x_ii/l_ii))` (`+` for the bottom wall); `amp_l(s,ii)` and `phase_l` are ignored, and a warning is printed if they are set.
+* `'sinusoid'`: `h = sum over d = i, ii of amp_l(s,d)/2*(1 + sin(2 pi n_wave(s,d) x_d/l_d + phase_l(s,d)))`.
+
+The roughness height range printed at start-up (`hmin`, `hmax`) is sampled from the actual wall shape on a grid 4 times finer than the mesh in x and y.
+
+`ibm_hch` is the reference half height (`Re_tau = ibm_hch/visc`) of the rough-wall grid `gtype = 5`, whose uniform fine region extends from `z = 0` to `hmax`. It is required for `gtype = 5` (with a height map, the value from the map's info file is used if `ibm_hch` is not set).
+
+`bulk_vel_def` is described with `velf` above.
+
+`ibm_proj` selects the velocity correction after the pressure Poisson equation, which is solved with the standard (not IB-aware) FFT solver:
+* `'none'` (default): standard correction everywhere. The correction leaks into the solid points (O(dt^2) velocities there), which are zeroed again at the start of the next RK stage.
+* `'damped'`: the correction is divided by the IB coefficient `A` at the non-solid points, as the exact IB scheme integrates a pressure-gradient impulse, and the solid points are not corrected, so their velocity stays exactly zero. The velocity is then divergence free only up to a residual in the cut cells, of the same size as the divergence that `'none'` creates when it zeroes the solid points, so the divergence check does not abort on it. The fluid bulk velocity is no longer conserved by the correction; with bulk forcing it is restored at the next stage. The cost is that of `'none'`.
+
+In tests (turbulent channel over the MacDonald wall, 64^3) the two options give the same errors and temporal order (2 at the band points) to three digits; `'damped'` removes only the solid leakage. A lagged pre-compensation of the predictor with the previous pressure correction (Kim-Moin type) was tested and is unstable: the zeroing of the solid points at each stage start already acts as such a pre-compensation.
+
+IB force output (with `is_ibm = T`):
+* `data/ibm_force.out`, every `iout0d` steps: the force the IB exerts on the fluid in that time step, per unit box volume (positive = drag), computed exactly from the momentum the IB removes from the plain explicit update. Columns: time; driving force `bforce - dpdl` (x, y, z); total IB force (x, y, z); its parts in the lower and upper halves of the domain (x, y, z each); the parts from the fluid (band) points, i.e. the `lambda` term, from the solid points (predictor zeroed), and from the projection leakage into the solid (x, y, z each). With `ibm_proj = 'damped'` there are three more columns, the part of the damped correction at the fluid (band) points; its solid-point part is included in the leakage columns. At steady state, total IB force + stresses on the domain walls = driving force. The drag on a z-wall is the total minus the driving force on the solid volume (`pi*h` per unit plan area). The z component includes the pressure inside the solid and on the domain boundary, so it is not a wall force.
+* `data/ibm_wall_stress_<step>.out`, every `iout1d` steps (lower z-wall only): plan-view map of the wall stress, `tau(i,j) = F(i,j)/(dx dy) - pi h(x,y)`, where `F(i,j)` is the IB force integrated over the lower half of the column and `h` is the wall height. Columns: i, j, tau_x at (xf(i),yc(j)), tau_y at (xc(i),yf(j)). Its mean is the drag per unit plan area.
+* `data/turb_stats_ibm_<step>.out`, every `iout1d` steps (z-walls), next to `turb_stats_<step>.out` (unchanged, superficial over all points including the solid): plane statistics over the fluid points only. Columns: z; fluid fractions `phi` of the u-, v- and cell-centre points; intrinsic means of u, v, w; intrinsic covariances u'u', v'v', w'w', u'w', u'v', v'w' (w and the products with w at the cell centres, over the fluid cells, with the solid faces counted as 0). Superficial means are `phi` times the intrinsic ones. In a fully solid plane the values are 0.
+* `data/FV-fric_<rank>_s_<step>.out`, every `iout1d` steps, one file per task: the wall force per cell in that time step, for every cell that contains a piece of the wall. It is the exact IB force of `ibm_force.out` distributed over the cells, so its sum is the drag of `ibm_wall_stress_*.out` (up to the solid volume of the cut cells, sampled with 20^3 points per cell). Each velocity node next to the wall passes its IB impulse to the cell in which its wall point lies. For a band node this is the `lambda` part, split over the wall directions in proportion to `lambda`. For a solid node it is the local momentum flux from its fluid neighbours. The pressure part of the solid nodes is telescoped onto the cut cells: a cell gets `p - p_mean` times its face area for each solid face, with the sign of the face, so the pressure inside the solid cancels. The driving force on the solid part of the cell is subtracted. Columns: i, j, k (global); wall area; unit normal out of the solid (x, y, z); force of the fluid on the wall F (x, y, z); its normal part `F.n` and vector; its tangential part (magnitude, vector); the same divided by the wall area (normal stress `F.n/A`, i.e. minus the wall pressure relative to the fluid-mean pressure, and shear stress). The values are local, but a cell holds the force of the nodes next to its piece of wall, not a pointwise traction.
 
 # About the `&other_options` namelist under `input.nml`
 

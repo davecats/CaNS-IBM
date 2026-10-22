@@ -12,7 +12,7 @@ module mod_output
   use mod_types
   implicit none
   private
-  public out0d,gen_alias,out1d,out1d_chan,out2d,out3d,write_log_output,write_visu_2d,write_visu_3d,write_visu_subset
+  public out0d,gen_alias,out1d,out1d_chan,out1d_chan_ibm,out2d,out3d,write_log_output,write_visu_2d,write_visu_3d,write_visu_subset
   character(len=*), parameter :: fmt_dp = '(*(es24.16e3,1x))', &
                                  fmt_sp = '(*(es15.8e2,1x))'
 #if !defined(_SINGLE_PRECISION)
@@ -443,6 +443,94 @@ module mod_output
     case(1)
     end select
   end subroutine out1d_chan
+  !
+  subroutine out1d_chan_ibm(fname,ng,lo,hi,l,dl,z_g,u,v,w,mask_u,mask_v,mask_w,mask_s)
+    !
+    ! IBM version of out1d_chan (wall-normal direction z): plane statistics over the fluid
+    ! points only (intrinsic averages), with the solid values excluded, and the fluid
+    ! fractions phi(z) of the u-, v- and cell-centre points; superficial means are
+    ! phi*intrinsic. w and the products with w are taken at the cell centres, over the
+    ! fluid cells (mask_s), with solid faces counted as 0. In a fully solid plane the
+    ! intrinsic statistics are set to 0.
+    ! columns: z, phi_u, phi_v, phi_c, <u>, <v>, <w>, <u'u'>, <v'v'>, <w'w'>, <u'w'>, <u'v'>, <v'w'>
+    !
+    implicit none
+    character(len=*), intent(in) :: fname
+    integer , intent(in), dimension(3) :: ng,lo,hi
+    real(rp), intent(in), dimension(3) :: l,dl
+    real(rp), intent(in), dimension(0:) :: z_g
+    real(rp), intent(in), dimension(lo(1)-1:,lo(2)-1:,lo(3)-1:) :: u,v,w
+    logical , intent(in), dimension(lo(1)-1:,lo(2)-1:,lo(3)-1:) :: mask_u,mask_v,mask_w,mask_s
+    integer , parameter :: nv = 14
+    real(rp), allocatable, dimension(:,:) :: st
+    real(rp) :: cu,su,suu,cv,sv,svv,cc,suc,svc,swc,sww,suw,suv,svw,uc,vc,wc
+    real(rp) :: phi(3),mean(3),cov(6)
+    integer  :: i,j,k,iunit
+    allocate(st(ng(3),nv))
+    st(:,:) = 0.
+    !$acc data copy(st)
+    !$acc parallel default(present)
+    !$acc loop gang private(cu,su,suu,cv,sv,svv,cc,suc,svc,swc,sww,suw,suv,svw)
+    do k=lo(3),hi(3)
+      cu = 0.; su = 0.; suu = 0.
+      cv = 0.; sv = 0.; svv = 0.
+      cc = 0.; suc = 0.; svc = 0.; swc = 0.; sww = 0.; suw = 0.; suv = 0.; svw = 0.
+      !$acc loop vector collapse(2) private(uc,vc,wc) &
+      !$acc reduction(+:cu,su,suu,cv,sv,svv,cc,suc,svc,swc,sww,suw,suv,svw)
+      do j=lo(2),hi(2)
+        do i=lo(1),hi(1)
+          if(.not.mask_u(i,j,k)) then
+            cu  = cu  + 1.
+            su  = su  + u(i,j,k)
+            suu = suu + u(i,j,k)**2
+          end if
+          if(.not.mask_v(i,j,k)) then
+            cv  = cv  + 1.
+            sv  = sv  + v(i,j,k)
+            svv = svv + v(i,j,k)**2
+          end if
+          if(.not.mask_s(i,j,k)) then
+            uc = 0.5*(merge(0._rp,u(i-1,j,k),mask_u(i-1,j,k)) + merge(0._rp,u(i,j,k),mask_u(i,j,k)))
+            vc = 0.5*(merge(0._rp,v(i,j-1,k),mask_v(i,j-1,k)) + merge(0._rp,v(i,j,k),mask_v(i,j,k)))
+            wc = 0.5*(merge(0._rp,w(i,j,k-1),mask_w(i,j,k-1)) + merge(0._rp,w(i,j,k),mask_w(i,j,k)))
+            cc  = cc  + 1.
+            suc = suc + uc
+            svc = svc + vc
+            swc = swc + wc
+            sww = sww + wc**2
+            suw = suw + uc*wc
+            suv = suv + uc*vc
+            svw = svw + vc*wc
+          end if
+        end do
+      end do
+      st(k,:) = [cu,su,suu,cv,sv,svv,cc,suc,svc,swc,sww,suw,suv,svw]
+    end do
+    !$acc end parallel
+    !$acc end data
+    call MPI_ALLREDUCE(MPI_IN_PLACE,st,size(st),MPI_REAL_RP,MPI_SUM,MPI_COMM_WORLD,ierr)
+    if(myid == 0) then
+      open(newunit=iunit,file=fname)
+      do k=1,ng(3)
+        cu = st(k,1); cv = st(k,4); cc = st(k,7)
+        phi(:) = [cu,cv,cc]/(1.*ng(1)*ng(2))
+        mean(:) = 0.; cov(:) = 0.
+        if(cu > 0.) mean(1) = st(k,2)/cu
+        if(cv > 0.) mean(2) = st(k,5)/cv
+        if(cc > 0.) mean(3) = st(k,10)/cc
+        if(cu > 0.) cov(1) = st(k,3)/cu - mean(1)**2
+        if(cv > 0.) cov(2) = st(k,6)/cv - mean(2)**2
+        if(cc > 0.) then
+          cov(3) = st(k,11)/cc - mean(3)**2
+          cov(4) = st(k,12)/cc - st(k,8)/cc*mean(3)
+          cov(5) = st(k,13)/cc - st(k,8)/cc*st(k,9)/cc
+          cov(6) = st(k,14)/cc - st(k,9)/cc*mean(3)
+        end if
+        write(iunit,fmt_rp) z_g(k),phi(:),mean(:),cov(:)
+      end do
+      close(iunit)
+    end if
+  end subroutine out1d_chan_ibm
   !
   subroutine out2d_duct(fname,ng,lo,hi,idir,l,dl,z_g,u,v,w) ! e.g. for a duct
     !

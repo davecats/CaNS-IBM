@@ -1,6 +1,6 @@
 module mod_thakkar
-    use :: mod_types
-    use :: mpi
+    use mod_types
+    use mpi
     implicit none
     real(rp),allocatable    :: hmap_tha(:,:)
     real(rp)                :: lx_tha,ly_tha,lz_tha,dx_tha,dy_tha,dz_tha,dxi_tha,dyi_tha,dzi_tha,&
