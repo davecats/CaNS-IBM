@@ -208,6 +208,7 @@ program cans
   real(rp),allocatable :: frifv(:,:,:,:),frifvout(:,:)
   character (len=7)   :: mpiranknum 
   real(rp) :: dt_fv
+  real(rp) :: ibm_idx_off(12)
 !*******HMAP********!,
   !for init grid
   real(rp)  :: hmax_g,hch_g,hmean_g,hmin_g
@@ -582,6 +583,9 @@ program cans
     allocate(fri_w(count(band_w(1:n(1),1:n(2),1:n(3))),12))
     allocate(p_grad(count(band_s(1:n(1),1:n(2),1:n(3))),12))
     allocate(dum_g(1,12))! dummy array 
+    ! columns 7-9 of the force output hold rank-local indices; written as global ones
+    ibm_idx_off(:) = 0._rp
+    ibm_idx_off(7:9) = lo(1:3)-1
     ! now lets init the global arrays
     size_u=size(fri_u,1);size_v=size(fri_v,1);size_w=size(fri_w,1);size_s=size(p_grad,1)
     call MPI_GATHER(size_u,1,MPI_INT,fri_u_ga,1,MPI_INT,0,MPI_COMM_WORLD,ierr)
@@ -661,10 +665,14 @@ program cans
       endif
       !$acc update self(fri_u,fri_v,fri_w,p_grad)
       do ibm_i=1,12
-        call MPI_GATHERV(fri_u(:,ibm_i),size_u,MPI_REAL_RP,globu(:,ibm_i),fri_u_ga,displ_u,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-        call MPI_GATHERV(fri_v(:,ibm_i),size_v,MPI_REAL_RP,globv(:,ibm_i),fri_v_ga,displ_v,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-        call MPI_GATHERV(fri_w(:,ibm_i),size_w,MPI_REAL_RP,globw(:,ibm_i),fri_w_ga,displ_w,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-        call MPI_GATHERV(p_grad(:,ibm_i),size_s,MPI_REAL_RP,globp(:,ibm_i),sca_ga,displ_s,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+        call MPI_GATHERV(fri_u(:,ibm_i)+ibm_idx_off(ibm_i),&
+                         size_u,MPI_REAL_RP,globu(:,ibm_i),fri_u_ga,displ_u,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+        call MPI_GATHERV(fri_v(:,ibm_i)+ibm_idx_off(ibm_i),&
+                         size_v,MPI_REAL_RP,globv(:,ibm_i),fri_v_ga,displ_v,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+        call MPI_GATHERV(fri_w(:,ibm_i)+ibm_idx_off(ibm_i),&
+                         size_w,MPI_REAL_RP,globw(:,ibm_i),fri_w_ga,displ_w,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+        call MPI_GATHERV(p_grad(:,ibm_i)+ibm_idx_off(ibm_i),&
+                         size_s,MPI_REAL_RP,globp(:,ibm_i),sca_ga,displ_s,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
       end do
       if(myid==0)then
         call write_data(trim(datadir)//"fric-u_"//fldnum//".out",myid,fri_u_g)
@@ -895,10 +903,14 @@ program cans
         endif
         !$acc update self(fri_u,fri_v,fri_w,p_grad)
         do ibm_i=1,12
-          call MPI_GATHERV(fri_u(:,ibm_i),size_u,MPI_REAL_RP,globu(:,ibm_i),fri_u_ga,displ_u,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-          call MPI_GATHERV(fri_v(:,ibm_i),size_v,MPI_REAL_RP,globv(:,ibm_i),fri_v_ga,displ_v,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-          call MPI_GATHERV(fri_w(:,ibm_i),size_w,MPI_REAL_RP,globw(:,ibm_i),fri_w_ga,displ_w,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
-          call MPI_GATHERV(p_grad(:,ibm_i),size_s,MPI_REAL_RP,globp(:,ibm_i),sca_ga,displ_s,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+          call MPI_GATHERV(fri_u(:,ibm_i)+ibm_idx_off(ibm_i),&
+                           size_u,MPI_REAL_RP,globu(:,ibm_i),fri_u_ga,displ_u,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+          call MPI_GATHERV(fri_v(:,ibm_i)+ibm_idx_off(ibm_i),&
+                           size_v,MPI_REAL_RP,globv(:,ibm_i),fri_v_ga,displ_v,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+          call MPI_GATHERV(fri_w(:,ibm_i)+ibm_idx_off(ibm_i),&
+                           size_w,MPI_REAL_RP,globw(:,ibm_i),fri_w_ga,displ_w,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
+          call MPI_GATHERV(p_grad(:,ibm_i)+ibm_idx_off(ibm_i),&
+                           size_s,MPI_REAL_RP,globp(:,ibm_i),sca_ga,displ_s,MPI_REAL_RP,0,MPI_COMM_WORLD,ierr)
         end do
         if(myid==0)then
           call write_data(trim(datadir)//"fric-u_"//fldnum//".out",myid,fri_u_g)
