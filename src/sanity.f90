@@ -18,7 +18,8 @@ module mod_sanity
   use mod_initflow  , only: add_noise
   use mod_initmpi   , only: initmpi
   use mod_initsolver, only: initsolver
-  use mod_param     , only: ipencil_axis,is_impdiff,is_impdiff_1d,is_poisson_pcr_tdma,small,adv_form
+  use mod_param     , only: ipencil_axis,is_impdiff,is_impdiff_1d,is_poisson_pcr_tdma,small,adv_form, &
+                            is_ibm,ibm_2nd
 #if !defined(_OPENACC)
   use mod_solver    , only: solver
 #else
@@ -62,6 +63,12 @@ module mod_sanity
     end if
     if(.not.any(trim(adv_form) == ['vv ','div'])) then
       if(myid == 0)  print*, 'ERROR: `adv_form` must be either `vv` or `div`.'; call abortit
+    end if
+    if(ibm_2nd .and. is_impdiff) then
+      if(myid == 0)  print*, 'ERROR: `ibm_2nd = T` is not compatible with implicit diffusion (`is_impdiff = T`).'; call abortit
+    end if
+    if(is_ibm .and. is_impdiff) then
+      if(myid == 0)  print*, 'Warning: with `is_impdiff = T` the implicit Helmholtz solve does not see the IBM staircase.'
     end if
   end subroutine test_sanity_input
   !
