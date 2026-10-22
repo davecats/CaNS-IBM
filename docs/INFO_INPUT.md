@@ -332,6 +332,12 @@ These lines set the **scalar forcing**.
 
 `scalf` is an array of size `nscal` defining **the target bulk mean** for each scalar (where `is_sforced` is true; analogous to `velf` in momentum).
 
+```fortran
+const_scal        = T
+scal_mean_grad(1) = -1.
+```
+If `const_scal` is false (default true), each scalar `s` is the fluctuation about an imposed mean streamwise gradient, `S = scal_mean_grad*x + s`, and the advection of that mean gradient, `-u*scal_mean_grad`, is added to the right-hand side of the scalar equation (together with `ssource`). It is part of the explicit right-hand side, so it is integrated with the same Runge-Kutta weights as the advection term. `scal_mean_grad` is an array of size `nscal`, default `-1.`.
+
 ---
 
 **Buoyancy effects**

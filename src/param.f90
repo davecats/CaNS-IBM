@@ -76,7 +76,8 @@ character(len=100), protected, allocatable, dimension(:)     :: iniscal
 character(len=1)  , protected, allocatable, dimension(:,:,:) :: cbcscal ! size (0:1,3,nscal)
 real(rp)          , protected, allocatable, dimension(:,:,:) ::  bcscal ! size (0:1,3,nscal)
 real(rp), protected, allocatable, dimension(:) :: ssource
-logical,protected :: const_scal
+logical,protected :: const_scal ! if false, the mean-gradient source -u*scal_mean_grad is added
+real(rp), protected, allocatable, dimension(:) :: scal_mean_grad
 logical , protected, allocatable, dimension(:) :: is_sforced
 real(rp), protected, allocatable, dimension(:) :: scalf
 logical , protected :: is_boussinesq_buoyancy = .false.
@@ -174,7 +175,7 @@ contains
                      iniscal, &
                      cbcscal,bcscal, &
                      cbcscal_ibm,bcscal_ibm,&
-                     const_scal,&
+                     const_scal,scal_mean_grad,&
                      ssource, &
                      is_sforced, &
                      scalf, &
@@ -331,7 +332,7 @@ contains
         allocate(alphai(nscal),iniscal(nscal), &
                  cbcscal(0:1,3,nscal),bcscal(0:1,3,nscal), &
                  cbcscal_ibm(nscal),bcscal_ibm(nscal),&
-                 ssource(nscal),is_sforced(nscal),scalf(nscal))
+                 ssource(nscal),is_sforced(nscal),scalf(nscal),scal_mean_grad(nscal))
         !
         ! set default values
         !
@@ -341,6 +342,8 @@ contains
         scalf(:)      = 0.
         cbcscal_ibm(:) = "D"
         bcscal_ibm(:)  = 0._rp
+        const_scal     = .true.
+        scal_mean_grad(:) = -1._rp
         !
         ! read `scalar` namelist
         !

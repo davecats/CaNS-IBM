@@ -59,7 +59,7 @@ program cans
                                  gacc,nscal,beta, &
                                  alphai,iniscal,cbcscal,bcscal,&
                                  cbcscal_ibm,bcscal_ibm,&
-                                 ssource,is_sforced,scalf,&
+                                 ssource,is_sforced,scalf,scal_mean_grad,&
                                  is_boussinesq_buoyancy,&
                                  dims, &
                                  nb,is_bound, &
@@ -731,7 +731,8 @@ program cans
         s => scalars(iscal)
         if(ibm_2nd) call calc_a_b(lap_s,A_s,B_s,dtrk,s%alpha,dl) ! A_s, B_s depend on the diffusivity
         call rk_scal(rkcoeff(:,irk),n,dli,l,dzci,dzfi,grid_vol_ratio_f,s%alpha,dt,is_bound,u,v,w, &
-                     s%is_forced,s%scalf,s%source,s%fluxo,s%dsdtrko,s%val,s%f,A_s,B_s,bcscal_ibm(iscal))
+                     s%is_forced,s%scalf,s%source,s%fluxo,s%dsdtrko,s%val,s%f,A_s,B_s, &
+                     bcscal_ibm(iscal),scal_mean_grad(iscal))
         call bulk_forcing_s(n,s%is_forced,s%f,s%val)
         fs(iscal) = fs(iscal) + s%f
         if(is_impdiff) then
