@@ -109,9 +109,10 @@ contains
   pure function ibm_impulse_point(ipart,is_solid,a,b,ff,p) result(q)
     !$acc routine seq
     !
-    ! one point of `ibm_impulse` (ipart = 1, 2, 3 for 'leak', 'pre', 'post')
+    ! one point of `ibm_impulse` (ipart = 1, 2, 3, 4, 5 for 'leak', 'pre', 'post', 'post_s', 'impl')
     !
     use mod_types
+    use mod_param, only: ibm_pen
     implicit none
     integer , intent(in) :: ipart
     logical , intent(in) :: is_solid
@@ -120,10 +121,11 @@ contains
     q = 0.
     if(is_solid) then
       if(ipart == 1) q = p
-      if(ipart == 3) q = a*p + ff
+      if(ipart == 3 .or. ipart == 4) q = a*p + ff
+      if(ipart == 5) q = (ibm_pen-1.)*p
     else
       if(ipart == 2) q = (1.-b)*p
-      if(ipart == 3) q = (a-1.)*p
+      if(ipart == 3 .or. ipart == 5) q = (a-1.)*p
     end if
   end function ibm_impulse_point
   subroutine ibm_impulse(part,n,lo,ng,grid_vol_ratio,mask,a,b,ff,p,imp,map)
@@ -136,6 +138,12 @@ contains
     !   part = 'post' (after the bulk forcing, before zeroing)     : sum_fluid (a-1)*u_new
     !                                                                + sum_solid (a*u_rk + ff)
     ! (with u_new = u_rk + ff/a at the fluid points, see `bulk_forcing_ibm`);
+    ! with implicit z diffusion (`solve_helmholtz_ibm`) 'post' is split in two:
+    !   part = 'post_s' (as 'post', before the implicit solve)     : sum_solid (u_rk + ff)
+    !   part = 'impl'   (after the implicit solve, before zeroing) : sum_fluid (a-1)*u_new
+    !                                                                + sum_solid (ibm_pen-1)*u_new
+    ! where ibm_pen*u_new is the impulse of the penalty that holds the solid point at 0, and
+    ! the Crank-Nicolson diffusion of u_new cancels between u_free and u_ibm;
     ! imp(1:2,1) accumulates the fluid, imp(1:2,2) the solid points, each split into
     ! the lower (k <= ng(3)/2) and upper halves of the domain;
     ! map(i,j), if present, accumulates the lower-half sum over each (i,j) column
@@ -158,6 +166,10 @@ contains
       ipart = 1
     case('pre')
       ipart = 2
+    case('post_s')
+      ipart = 4
+    case('impl')
+      ipart = 5
     case default
       ipart = 3
     end select

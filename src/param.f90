@@ -21,6 +21,7 @@ real(rp), parameter :: eps = epsilon(1._rp)
 real(rp), parameter :: eps = 0._rp
 #endif
 real(rp), parameter :: small = epsilon(1._rp)*10**(precision(1._rp)/2)
+real(rp), parameter :: ibm_pen = 1._rp/epsilon(1._rp) ! solid-point penalty of the z-implicit IBM solve
 character(len=100), parameter :: datadir = 'data/'
 real(rp), parameter, dimension(2,3) :: rkcoeff = reshape([32._rp/60._rp,  0._rp        , &
                                                           25._rp/60._rp, -17._rp/60._rp, &

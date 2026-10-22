@@ -224,9 +224,15 @@ module mod_rk
           endif
           !
           if(is_impdiff) then
-            u(i,j,k) = u(i,j,k) + factor12*dudtrkd(i,j,k)
-            v(i,j,k) = v(i,j,k) + factor12*dvdtrkd(i,j,k)
-            w(i,j,k) = w(i,j,k) + factor12*dwdtrkd(i,j,k)
+            if(.not.ibm_2nd)then
+              u(i,j,k) = u(i,j,k) + factor12*dudtrkd(i,j,k)
+              v(i,j,k) = v(i,j,k) + factor12*dvdtrkd(i,j,k)
+              w(i,j,k) = w(i,j,k) + factor12*dwdtrkd(i,j,k)
+            else
+              u(i,j,k) = u(i,j,k) + factor12*dudtrkd(i,j,k)/A_u(i,j,k)
+              v(i,j,k) = v(i,j,k) + factor12*dvdtrkd(i,j,k)/A_v(i,j,k)
+              w(i,j,k) = w(i,j,k) + factor12*dwdtrkd(i,j,k)/A_w(i,j,k)
+            endif
           end if
         end do
       end do
@@ -409,18 +415,33 @@ module mod_rk
     if(is_impdiff) then
       !
       ! compute rhs of Helmholtz equation
+      ! (with ibm_2nd: rhs/A, as `solve_helmholtz_ibm` multiplies it by A)
       !
-      !$acc parallel loop collapse(3) default(present) async(1)
-      !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
-      do k=1,n(3)
-        do j=1,n(2)
-          do i=1,n(1)
-            u(i,j,k) = u(i,j,k) - .5_rp*factor12*dudtrkd(i,j,k)
-            v(i,j,k) = v(i,j,k) - .5_rp*factor12*dvdtrkd(i,j,k)
-            w(i,j,k) = w(i,j,k) - .5_rp*factor12*dwdtrkd(i,j,k)
+      if(.not.ibm_2nd) then
+        !$acc parallel loop collapse(3) default(present) async(1)
+        !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
+        do k=1,n(3)
+          do j=1,n(2)
+            do i=1,n(1)
+              u(i,j,k) = u(i,j,k) - .5_rp*factor12*dudtrkd(i,j,k)
+              v(i,j,k) = v(i,j,k) - .5_rp*factor12*dvdtrkd(i,j,k)
+              w(i,j,k) = w(i,j,k) - .5_rp*factor12*dwdtrkd(i,j,k)
+            end do
           end do
         end do
-      end do
+      else
+        !$acc parallel loop collapse(3) default(present) async(1)
+        !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
+        do k=1,n(3)
+          do j=1,n(2)
+            do i=1,n(1)
+              u(i,j,k) = u(i,j,k) - .5_rp*factor12*dudtrkd(i,j,k)/A_u(i,j,k)
+              v(i,j,k) = v(i,j,k) - .5_rp*factor12*dvdtrkd(i,j,k)/A_v(i,j,k)
+              w(i,j,k) = w(i,j,k) - .5_rp*factor12*dwdtrkd(i,j,k)/A_w(i,j,k)
+            end do
+          end do
+        end do
+      end if
     end if
   end subroutine rk
   !
@@ -530,7 +551,7 @@ module mod_rk
           s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + (A_s(i,j,k)-B_s(i,j,k))*sw + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) &
                       + factor12*ssource)/A_s(i,j,k)
           if(is_impdiff) then
-            s(i,j,k) = s(i,j,k) + factor12*dsdtrkd(i,j,k)
+            s(i,j,k) = s(i,j,k) + factor12*dsdtrkd(i,j,k)/A_s(i,j,k)
           end if
         end do
       end do
@@ -590,7 +611,7 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            s(i,j,k) = s(i,j,k) - .5_rp*factor12*dsdtrkd(i,j,k)
+            s(i,j,k) = s(i,j,k) - .5_rp*factor12*dsdtrkd(i,j,k)/A_s(i,j,k) ! rhs/A (A = 1 without ibm_2nd)
           end do
         end do
       end do

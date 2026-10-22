@@ -65,11 +65,13 @@ module mod_sanity
     if(.not.any(trim(adv_form) == ['vv ','div'])) then
       if(myid == 0)  print*, 'ERROR: `adv_form` must be either `vv` or `div`.'; call abortit
     end if
-    if(ibm_2nd .and. is_impdiff) then
-      if(myid == 0)  print*, 'ERROR: `ibm_2nd = T` is not compatible with implicit diffusion (`is_impdiff = T`).'; call abortit
+    if(ibm_2nd .and. is_impdiff .and. .not.is_impdiff_1d) then
+      if(myid == 0)  print*, 'ERROR: `ibm_2nd = T` with implicit diffusion requires `is_impdiff_1d = T` &
+                             &(the 3D FFT-based Helmholtz solver cannot hold the IB term).'; call abortit
     end if
-    if(is_ibm .and. is_impdiff) then
-      if(myid == 0)  print*, 'Warning: with `is_impdiff = T` the implicit Helmholtz solve does not see the IBM staircase.'
+    if(is_ibm .and. is_impdiff .and. .not.is_impdiff_1d) then
+      if(myid == 0)  print*, 'Warning: with `is_impdiff = T`, `is_impdiff_1d = F` the implicit Helmholtz solve &
+                             &does not see the IBM staircase.'
     end if
     if(.not.any(trim(ibm_shape) == ['macdonald','sinusoid '])) then
       if(myid == 0)  print*, 'ERROR: `ibm_shape` must be either `macdonald` or `sinusoid`.'; call abortit

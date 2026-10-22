@@ -88,7 +88,7 @@ program cans
                                  hmap_name          
   use mod_sanity         , only: test_sanity_input,test_sanity_solver
   use mod_scal           , only: scalar,initialize_scalars,bulk_forcing_s
-  use mod_solve_helmholtz, only: solve_helmholtz,rhs_bound
+  use mod_solve_helmholtz, only: solve_helmholtz,solve_helmholtz_ibm,rhs_bound
 #if !defined(_OPENACC)
   use mod_solver         , only: solver
 #else
@@ -141,6 +141,7 @@ program cans
   real(rp) :: dt,dti,dt_cfl,time,dtrk,dtrki,divtot,divmax
   real(rp) :: velmax_solid(3),divtot_m,divmax_m,ubulk_fl
   logical  :: is_ibm_force,is_ibm_map
+  character(len=6) :: impart
   real(rp), allocatable, dimension(:,:,:) :: imp_map ! column-integrated IB force (x,y) of the lower wall
   real(rp) :: imp_ibm(2,2,3),imp_leak(2,2,3),pi_drive(3) ! IB force: (lower/upper half, fluid/solid, component)
   real(rp) :: p_ref
@@ -658,6 +659,29 @@ program cans
     if(myid == 0) print*, "ERROR: ibm_2nd requires is_ibm = T"
     error stop
   endif
+  if(is_ibm .and. is_impdiff_1d)then
+    ! the IB-aware z-implicit solve (`solve_helmholtz_ibm`) needs whole z columns on each task
+    block
+      logical :: is_ok
+      is_ok = n(3) == ng(3)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,is_ok,1,MPI_LOGICAL,MPI_LAND,MPI_COMM_WORLD,ierr)
+      if(.not.is_ok) then
+        if(myid == 0) print*, "ERROR: is_ibm with is_impdiff_1d requires a domain not decomposed along z &
+                              &(ipencil_axis = 3, or dims(2) = 1)."
+        call MPI_FINALIZE(ierr)
+        error stop
+      end if
+      is_ok = .not.any(cbcvel(0,3,:)//cbcvel(1,3,:) == 'PP')
+      do iscal=1,nscal
+        is_ok = is_ok.and.scalars(iscal)%cbc(0,3)//scalars(iscal)%cbc(1,3) /= 'PP'
+      end do
+      if(.not.is_ok) then
+        if(myid == 0) print*, "ERROR: is_ibm with is_impdiff_1d requires non-periodic z boundaries."
+        call MPI_FINALIZE(ierr)
+        error stop
+      end if
+    end block
+  endif
 !********IBM-END*************!
   ! post-process and write initial condition
   !
@@ -785,8 +809,13 @@ program cans
         end if
         fs(iscal) = fs(iscal) + s%f
         if(is_impdiff) then
-          call solve_helmholtz(n,ng,hi,s%arrplan,s%normfft,-0.5*s%alpha*dtrk, &
-                               s%lambdaxy,s%a,s%b,s%c,s%rhsb%x,s%rhsb%y,s%rhsb%z,is_bound,s%cbc,['c','c','c'],s%val)
+          if(is_ibm .and. is_impdiff_1d) then
+            call solve_helmholtz_ibm(n,-0.5*s%alpha*dtrk,s%a,s%b,s%c,s%rhsb%x,s%rhsb%y,s%rhsb%z,is_bound, &
+                                     s%cbc,['c','c','c'],mask_s,A_s,bcscal_ibm(iscal),s%val)
+          else
+            call solve_helmholtz(n,ng,hi,s%arrplan,s%normfft,-0.5*s%alpha*dtrk, &
+                                 s%lambdaxy,s%a,s%b,s%c,s%rhsb%x,s%rhsb%y,s%rhsb%z,is_bound,s%cbc,['c','c','c'],s%val)
+          end if
         end if
         call boundp(s%cbc,n,s%bc,nb,is_bound,dl,dzc,s%val)
       end do
@@ -801,21 +830,40 @@ program cans
         call bulk_forcing(n,is_forced,f,u,v,w)
       end if
       if(is_ibm_force) then
-        call ibm_impulse('post',n,lo,ng,grid_vol_ratio_f,mask_u,A_u,B_u,merge(f(1),0._rp,is_forced(1)),u,imp_ibm(:,:,1), &
+        if(.not.is_impdiff_1d) then
+          impart = 'post'
+        else
+          impart = 'post_s' ! the fluid part follows the implicit solve ('impl')
+        end if
+        call ibm_impulse(impart,n,lo,ng,grid_vol_ratio_f,mask_u,A_u,B_u,merge(f(1),0._rp,is_forced(1)),u,imp_ibm(:,:,1), &
                          imp_map(:,:,1))
-        call ibm_impulse('post',n,lo,ng,grid_vol_ratio_f,mask_v,A_v,B_v,merge(f(2),0._rp,is_forced(2)),v,imp_ibm(:,:,2), &
+        call ibm_impulse(impart,n,lo,ng,grid_vol_ratio_f,mask_v,A_v,B_v,merge(f(2),0._rp,is_forced(2)),v,imp_ibm(:,:,2), &
                          imp_map(:,:,2))
-        call ibm_impulse('post',n,lo,ng,grid_vol_ratio_c,mask_w,A_w,B_w,merge(f(3),0._rp,is_forced(3)),w,imp_ibm(:,:,3))
+        call ibm_impulse(impart,n,lo,ng,grid_vol_ratio_c,mask_w,A_w,B_w,merge(f(3),0._rp,is_forced(3)),w,imp_ibm(:,:,3))
       end if
       dpdl(:) = dpdl(:) + f(:)
       if(is_impdiff) then
         alpha = -.5*visc*dtrk
-        call solve_helmholtz(n,ng,hi,arrplanu,normfftu,alpha, &
-                             lambdaxyu,au,bu,cu,rhsbu%x,rhsbu%y,rhsbu%z,is_bound,cbcvel(:,:,1),['f','c','c'],u)
-        call solve_helmholtz(n,ng,hi,arrplanv,normfftv,alpha, &
-                             lambdaxyv,av,bv,cv,rhsbv%x,rhsbv%y,rhsbv%z,is_bound,cbcvel(:,:,2),['c','f','c'],v)
-        call solve_helmholtz(n,ng,hi,arrplanw,normfftw,alpha, &
-                             lambdaxyw,aw,bw,cw,rhsbw%x,rhsbw%y,rhsbw%z,is_bound,cbcvel(:,:,3),['c','c','f'],w)
+        if(is_ibm .and. is_impdiff_1d) then
+          call solve_helmholtz_ibm(n,alpha,au,bu,cu,rhsbu%x,rhsbu%y,rhsbu%z,is_bound,cbcvel(:,:,1),['f','c','c'], &
+                                   mask_u,A_u,0._rp,u)
+          call solve_helmholtz_ibm(n,alpha,av,bv,cv,rhsbv%x,rhsbv%y,rhsbv%z,is_bound,cbcvel(:,:,2),['c','f','c'], &
+                                   mask_v,A_v,0._rp,v)
+          call solve_helmholtz_ibm(n,alpha,aw,bw,cw,rhsbw%x,rhsbw%y,rhsbw%z,is_bound,cbcvel(:,:,3),['c','c','f'], &
+                                   mask_w,A_w,0._rp,w)
+        else
+          call solve_helmholtz(n,ng,hi,arrplanu,normfftu,alpha, &
+                               lambdaxyu,au,bu,cu,rhsbu%x,rhsbu%y,rhsbu%z,is_bound,cbcvel(:,:,1),['f','c','c'],u)
+          call solve_helmholtz(n,ng,hi,arrplanv,normfftv,alpha, &
+                               lambdaxyv,av,bv,cv,rhsbv%x,rhsbv%y,rhsbv%z,is_bound,cbcvel(:,:,2),['c','f','c'],v)
+          call solve_helmholtz(n,ng,hi,arrplanw,normfftw,alpha, &
+                               lambdaxyw,aw,bw,cw,rhsbw%x,rhsbw%y,rhsbw%z,is_bound,cbcvel(:,:,3),['c','c','f'],w)
+        end if
+        if(is_ibm_force .and. is_impdiff_1d) then
+          call ibm_impulse('impl',n,lo,ng,grid_vol_ratio_f,mask_u,A_u,B_u,0._rp,u,imp_ibm(:,:,1),imp_map(:,:,1))
+          call ibm_impulse('impl',n,lo,ng,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,v,imp_ibm(:,:,2),imp_map(:,:,2))
+          call ibm_impulse('impl',n,lo,ng,grid_vol_ratio_c,mask_w,A_w,B_w,0._rp,w,imp_ibm(:,:,3))
+        end if
       end if
       !*******************!
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
