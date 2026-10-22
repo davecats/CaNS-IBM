@@ -418,7 +418,7 @@ module mod_rk
   end subroutine rk
   !
   subroutine rk_scal(rkpar,n,dli,l,dzci,dzfi,grid_vol_ratio_f,alpha,dt,is_bound,u,v,w, &
-                     is_forced,scalf,ssource,fluxo,dsdtrko,s,f,A_s,B_s)
+                     is_forced,scalf,ssource,fluxo,dsdtrko,s,f,A_s,B_s,sw)
 #if defined(_OPENACC)
     use mod_common_cudecomp, only: dsdtrk_t => work
 #endif
@@ -456,6 +456,7 @@ module mod_rk
     real(rp) :: mean
     real(rp),intent(in) :: A_s(0:,0:,0:)
     real(rp),intent(in) :: B_s(0:,0:,0:)
+    real(rp),intent(in) :: sw ! IBM wall value; the IB term relaxes s - sw, hence the (A_s-B_s)*sw term
     real(rp),parameter  :: tg=-1._rp ! temp grad ! we normalize the dT/dx = -1 for the MacDondald...
     !
     factor1 = rkpar(1)*dt
@@ -503,9 +504,10 @@ module mod_rk
       do j=1,n(2)
         do i=1,n(1)
           if(const_scal)then
-            s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) + factor12*ssource)/A_s(i,j,k)
+            s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + (A_s(i,j,k)-B_s(i,j,k))*sw + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) &
+                        + factor12*ssource)/A_s(i,j,k)
           else
-            s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k)&
+            s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + (A_s(i,j,k)-B_s(i,j,k))*sw + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k)&
                         + factor12*(.5_rp*-tg*(u(i,j,k)+u(i-1,j,k))))/A_s(i,j,k)
           endif
           if(is_impdiff) then
@@ -522,9 +524,10 @@ module mod_rk
         do j=1,n(2)
           do i=1,n(1)
             if(const_scal)then
-              s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) + factor12*ssource)/A_s(i,j,k)
+              s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + (A_s(i,j,k)-B_s(i,j,k))*sw + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) &
+                                              + factor12*ssource)/A_s(i,j,k)
             else
-              s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) &
+              s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + (A_s(i,j,k)-B_s(i,j,k))*sw + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) &
                                               + factor12*(.5_rp*-tg*(u(i,j,k)+u(i-1,j,k))))/A_s(i,j,k)
             endif
           end do
@@ -537,10 +540,10 @@ module mod_rk
         do j=1,n(2)
           do i=1,n(1)
             if(const_scal)then
-              s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) + &
+              s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + (A_s(i,j,k)-B_s(i,j,k))*sw + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) + &
                                   factor12*(ssource + dsdtrkd(i,j,k)))/A_s(i,j,k)
             else
-              s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) + &
+              s(i,j,k) = (B_s(i,j,k)*s(i,j,k) + (A_s(i,j,k)-B_s(i,j,k))*sw + factor1*dsdtrk(i,j,k) + factor2*dsdtrko(i,j,k) + &
                                   factor12*(.5_rp*-tg*(u(i,j,k)+u(i-1,j,k)) + dsdtrkd(i,j,k)))/A_s(i,j,k)
             endif
           end do
