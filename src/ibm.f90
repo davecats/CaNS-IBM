@@ -1174,6 +1174,7 @@ module mod_ibm
         integer                                             :: ic,jc,kc
         real(rp)                                            :: x,y,z,xp,xm,yp,ym,zp,zm,x_int,y_int,z_int
         real(rp)                                            :: dx_int,dy_int,dz_int
+        real(rp)                                            :: zw_lo,zw_hi
         integer                                             :: co
         real(rp)                                            :: cell_vol,fluid_vol,solid_vol
         integer, parameter                                  :: nsub = 20 ! sub-cells per direction
@@ -1205,6 +1206,28 @@ module mod_ibm
             ! now lets check the inside of the band point with smaller cubes
             dz_int=dzf(k);dy_int=(yg(j)-yg(j-1));dx_int=(xg(i)-xg(i-1))!get dx,dy,dz from global
             A_dx=dy_int*dz_int/nsub**2;A_dy=dx_int*dz_int/nsub**2;A_dz=dx_int*dy_int/nsub**2
+            if(.not.any(ibm_direction(:,1:2))) then
+              ! z-walls only: the solid test is monotone in z, so the wall heights are evaluated
+              ! once per sub-column (the same comparisons as in isInbody)
+              do jc=1,nsub
+                y_int=y-0.5_rp*dy_int+(real(jc,kind=rp)-0.5_rp)/nsub*dy_int
+                do ic=1,nsub
+                  x_int=x-0.5_rp*dx_int+(real(ic,kind=rp)-0.5_rp)/nsub*dx_int
+                  zw_lo = -huge(1._rp); zw_hi = huge(1._rp)
+                  if(ibm_direction(0,3)) zw_lo = wall_height(0,3,x_int,y_int,amp_l,n_wave,l_0,phase_l,l, &
+                                                             hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap)
+                  if(ibm_direction(1,3)) zw_hi = wall_height(1,3,x_int,y_int,amp_l,n_wave,l_0,phase_l,l, &
+                                                             hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap)
+                  do kc=1,nsub
+                    z_int=z-0.5_rp*dz_int+(real(kc,kind=rp)-0.5_rp)/nsub*dz_int ! sub-cell centre
+                    if(z_int<=zw_lo.or.z_int>=zw_hi)then
+                      mask_subcell(ic,jc,kc)=.true.
+                      co=co+1
+                    endif
+                  end do
+                end do
+              end do
+            else
             do kc=1,nsub
                 z_int=z-0.5_rp*dz_int+(real(kc,kind=rp)-0.5_rp)/nsub*dz_int ! sub-cell centre
                 do jc=1,nsub
@@ -1216,9 +1239,10 @@ module mod_ibm
                             mask_subcell(ic,jc,kc)=.true. ! this subcell is in solid
                             co=co+1
                         endif
-                    end do 
-                end do 
+                    end do
+                end do
             end do
+            end if
             do kc=1,nsub
                 do jc=1,nsub
                     do ic=1,nsub
