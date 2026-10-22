@@ -648,9 +648,9 @@ program cans
     include 'out1d.h90'
     call out1d_chan(trim(datadir)//'turb_stats_'//fldnum//'.out',ng,lo,hi,3,l,dl,zc_g,u,v,w)
     if(is_ibm)then
-      call calc_shear_st(fri_u,u)
-      call calc_shear_st(fri_v,v)
-      call calc_shear_st(fri_w,w)
+      call calc_shear_st(fri_u,u,visc)
+      call calc_shear_st(fri_v,v,visc)
+      call calc_shear_st(fri_w,w,visc)
       call get_wall_pres(p,p_grad,lo,dl,zc,zf,mask_s,band_s)
       if(myid==0)then
         globu=>fri_u_g
@@ -886,9 +886,9 @@ program cans
       end do
       call out1d_chan(trim(datadir)//'turb_stats_'//fldnum//'.out',ng,lo,hi,3,l,dl,zc_g,u,v,w)
       if(is_ibm)then
-        call calc_shear_st(fri_u,u)
-        call calc_shear_st(fri_v,v)
-        call calc_shear_st(fri_w,w)
+        call calc_shear_st(fri_u,u,visc)
+        call calc_shear_st(fri_v,v,visc)
+        call calc_shear_st(fri_w,w,visc)
         call get_wall_pres(p,p_grad,lo,dl,zc,zf,mask_s,band_s)
         if(myid==0)then
           globu=>fri_u_g

@@ -756,10 +756,11 @@ module mod_ibm
             end do 
         end do
     end subroutine calc_grad_dist
-    subroutine calc_shear_st(grad_dist_id,vel_id)
+    subroutine calc_shear_st(grad_dist_id,vel_id,visc_loc)
         ! we assume the walls arent moving therefore we do the distance calc.
         ! time and compute the gradient here at each wanted time step
         real(rp),dimension(0:,0:,0:),intent(in)                 :: vel_id
+        real(rp),intent(in)                                     :: visc_loc ! not the module visc: device code
         real(rp),dimension(:,:),intent(inout)                   :: grad_dist_id
         integer                                                 :: i,j,k,kk
         real(rp)                                                :: grad,dist_grad,shear_st
@@ -774,7 +775,7 @@ module mod_ibm
             dist_grad=grad_dist_id(kk,10)
             !we have the location of the i,j,k for the velocity
             call comp_grad(dist_grad,vel_id(i,j,k),grad)
-            shear_st=visc*grad
+            shear_st=visc_loc*grad
             grad_dist_id(kk,11)=grad
             grad_dist_id(kk,12)=shear_st
         end do 
@@ -988,12 +989,12 @@ module mod_ibm
         logical, intent(in), dimension(0:,0:,0:)    :: band_s
         real(rp),dimension(3)                       :: c0,p_normalv
         integer                                     :: kk,dix,diy,diz 
-        integer                                     :: i,j,k,m,in,jn,kn,di,dj,dk,count,gen_count,wr
+        integer                                     :: i,j,k,m,in,jn,kn,di,dj,dk,count
         real(rp)                                    :: dist,x,y,z,xp,xm,yp,ym,zp,zm
         real(rp),dimension(3)                       :: vec                                    
         real(rp)                                    :: pw,b !b is the the pressure gradient
         real(rp)                                    :: s0,s1,s2,t0,t1
-        kk=0;dix=0;diy=0;diz=0;m=0;count=0;gen_count=0;wr=0;
+        kk=0;dix=0;diy=0;diz=0;m=0;count=0;
         dist=0._rp;vec(:)=0._rp
         ! now we have the pressures that are on the surface but arent in the solid
         ! lets get their planes etc. we can directly call the grad distance
@@ -1006,7 +1007,6 @@ module mod_ibm
         !$acc& private(vec,pw,b,dist,x,y,z,xp,xm,yp,ym,zp,zm) &
         !$acc& private(di,dj,dk,in,jn,kn,count,dix,diy,diz)
         do kk=lbound(p_grad,1),ubound(p_grad,1)
-            gen_count=gen_count+1
             c0(1)=p_grad(kk,1)
             c0(2)=p_grad(kk,2)
             c0(3)=p_grad(kk,3)
@@ -1042,7 +1042,7 @@ module mod_ibm
                 t0=t0+p(in,jn,kn)
                 t1=t1+dist*p(in,jn,kn)
             end do
-            if(s0<3)cycle
+            if(s0<3 .or. abs(s0*s2-s1**2) <= epsilon(1._rp)*s0*s2)cycle ! too few points, or all at the same distance
             ! we use direct mse from the gatti's source 
             pw=(s2*t0-s1*t1)*(s0*s2-s1**2)**(-1)
             b=(s0*t1-s1*t0)*(s0*s2-s1**2)**(-1)
