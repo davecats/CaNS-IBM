@@ -51,7 +51,7 @@ is_boussinesq_buoyancy = F
 is_impdiff = F, is_impdiff_1d = F
 is_poisson_pcr_tdma = F
 is_fast_mom_kernels = F
-adv_form = 'div'
+adv_form = 'vv'
 /
 
 &other_options
