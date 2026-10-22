@@ -803,6 +803,7 @@ module mod_ibm
         real(rp)                                            :: angle1,angle2,angle3
         real(rp),intent(out),dimension(3,2)                 :: plane
         real(rp)                                            :: out_dum,out_n,angle_dum
+        real(rp),dimension(3,3)                             :: cov
         integer                                             :: c_n
 
         !first lets create a center
@@ -834,44 +835,66 @@ module mod_ibm
                 endif
             enddo
         enddo
-        ! now we have the vectors lets compute their normals
-        ! we do it with a cross product
-        !print*, center
+        ! least-squares plane through the wall points: the normal is the eigenvector of
+        ! the covariance matrix C = sum(vec vec^T) with the smallest eigenvalue
+        cov(:,:)=0._rp
         do n=0,26
             do m=1,6
-                if(.not.(wall_loc_log(m,n)))cycle
-                vec1(:)=vec(:,m,n)
-                do g=0,26
-                    do f=1,6
-                        if(wall_loc_log(f,g))then
-                            if(g/=n.or.f/=m)then
-                                vec2(:)=vec(:,f,g)
-                                call comp_cross(vec1,vec2,n1)
-                                if(c_n<1)n_ref=n1
-                                ! now we have a normal lets check this one for all vectors available
-                                ! lets check their direction then if they are positive lets add up 
-                                ! if they are neg. then lets change them (so they look outwards)
-                                ! after that simply average so we get an averaged normal
-                                if(c_n>1)then
-                                    ! here we check the new normal w/ with the first normal
-                                    call comp_sca(n1,n_ref,angle_dum,out_n)
-                                    if(out_n<0._rp)n1=-n1
-                                    ! now we have positive defined normal vector
-                                endif
-                                c_n=c_n+1 
-                                n_av=n_av+n1
-                            endif
-                        endif
+                if(wall_loc_log(m,n))then
+                    do g=1,3
+                        cov(:,g)=cov(:,g)+vec(:,m,n)*vec(g-1,m,n)
                     enddo
-                enddo    
+                endif
             enddo
         enddo
-        n_av=n_av/c_n
+        call smallest_eigvec_sym3(cov,n_av)
         call nomrlalize_vec(n_av,norm_nav)
         plane(:,1)=center(:)
         plane(:,2)=norm_nav(:)
         ! now we have our normals lets check each normal w/ each vector 
     end subroutine get_plane
+    subroutine smallest_eigvec_sym3(a,ev)
+        ! eigenvector of the smallest eigenvalue of a symmetric 3x3 matrix
+        ! (closed-form eigenvalues, eigenvector from the largest cross product of the
+        ! rows of a - lambda*I); returns 0 for a zero matrix
+        real(rp),intent(in),dimension(3,3)  :: a
+        real(rp),intent(out),dimension(3)   :: ev
+        real(rp),parameter                  :: pi = 3.141592653589793_rp
+        real(rp)                            :: p1,p2,p,q,r,phi,lam,mag,mag_c
+        real(rp),dimension(3,3)             :: b
+        real(rp),dimension(3)               :: c
+        integer                             :: i1,i2
+        ev(:)=0._rp
+        p1=a(1,2)**2+a(1,3)**2+a(2,3)**2
+        q=(a(1,1)+a(2,2)+a(3,3))/3._rp
+        p2=(a(1,1)-q)**2+(a(2,2)-q)**2+(a(3,3)-q)**2+2._rp*p1
+        if(p2<=tiny(1._rp))return ! a = q*I: no preferred direction
+        p=sqrt(p2/6._rp)
+        b(:,:)=a(:,:)
+        b(1,1)=b(1,1)-q;b(2,2)=b(2,2)-q;b(3,3)=b(3,3)-q
+        b(:,:)=b(:,:)/p
+        r=0.5_rp*(b(1,1)*(b(2,2)*b(3,3)-b(2,3)*b(3,2)) &
+                 -b(1,2)*(b(2,1)*b(3,3)-b(2,3)*b(3,1)) &
+                 +b(1,3)*(b(2,1)*b(3,2)-b(2,2)*b(3,1)))
+        r=min(max(r,-1._rp),1._rp)
+        phi=acos(r)/3._rp
+        lam=q+2._rp*p*cos(phi+2._rp*pi/3._rp) ! smallest eigenvalue
+        b(:,:)=a(:,:)
+        b(1,1)=b(1,1)-lam;b(2,2)=b(2,2)-lam;b(3,3)=b(3,3)-lam
+        mag=0._rp
+        do i1=1,2
+            do i2=i1+1,3
+                c(1)=b(i1,2)*b(i2,3)-b(i1,3)*b(i2,2) ! not comp_cross: it normalises
+                c(2)=b(i1,3)*b(i2,1)-b(i1,1)*b(i2,3)
+                c(3)=b(i1,1)*b(i2,2)-b(i1,2)*b(i2,1)
+                mag_c=norm2(c)
+                if(mag_c>mag)then
+                    mag=mag_c
+                    ev(:)=c(:)
+                endif
+            enddo
+        enddo
+    end subroutine smallest_eigvec_sym3
     subroutine comp_cross(vec1,vec2,vec3)
         real(rp),intent(in),dimension(3) :: vec1,vec2
         real(rp),intent(out),dimension(3) :: vec3
