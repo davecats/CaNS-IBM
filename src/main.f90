@@ -94,7 +94,7 @@ program cans
 #endif
   use mod_updatep        , only: updatep
   use mod_utils          , only: bulk_mean,calc_mean_flow,&
-                                 calc_mean_flow_easy
+                                 calc_mean_flow_easy,chk_ibm
 #if defined(_OPENACC)
   use mod_utils          , only: device_memory_footprint
 #endif
@@ -134,6 +134,7 @@ program cans
   type(rhs_bound) :: rhsbu,rhsbv,rhsbw
   !
   real(rp) :: dt,dti,dt_cfl,time,dtrk,dtrki,divtot,divmax
+  real(rp) :: velmax_solid(3),divtot_m,divmax_m,ubulk_fl
   integer :: irk,istep,iunit
   real(rp), allocatable, dimension(:) :: dzc  ,dzf  ,zc  ,zf  ,dzci  ,dzfi, &
                                          dzc_g,dzf_g,zc_g,zf_g,dzci_g,dzfi_g, &
@@ -801,6 +802,20 @@ program cans
       dti = 1./dt
       call chkdiv(lo,hi,l,dli,dzfi,u,v,w,divtot,divmax)
       if(myid == 0) print*, 'Velocity divergence norms: Mean = ', divtot, '| Maximum = ', divmax
+      if(is_ibm) then
+        call chk_ibm(n,l,dli,dzfi,grid_vol_ratio_f,mask_u,mask_v,mask_w,u,v,w, &
+                     velmax_solid,divtot_m,divmax_m,ubulk_fl)
+        if(myid == 0) print*, 'IBM: max|u,v,w| in solid = ', velmax_solid(:)
+        if(myid == 0) print*, 'IBM: masked divergence norms: Mean = ', divtot_m, '| Maximum = ', divmax_m
+        if(myid == 0) print*, 'IBM: fluid-only bulk velocity = ', ubulk_fl
+        var(1) = 1.*istep
+        var(2) = time
+        var(3:5) = velmax_solid(:)
+        var(6) = divtot_m
+        var(7) = divmax_m
+        var(8) = ubulk_fl
+        call out0d(trim(datadir)//'ibm_chk.out',8,var)
+      end if
       if(.not.is_mask_divergence_check) then
         if(divmax > small.or.is_nan(divtot)) then
           if(myid == 0) print*, 'ERROR: maximum divergence is too large.'

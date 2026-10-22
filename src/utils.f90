@@ -7,7 +7,7 @@
 module mod_utils
   implicit none
   private
-  public bulk_mean,f_sizeof,swap,calc_mean_flow,calc_mean_flow_easy
+  public bulk_mean,f_sizeof,swap,calc_mean_flow,calc_mean_flow_easy,chk_ibm
 #if defined(_OPENACC)
   public device_memory_footprint
 #endif
@@ -126,6 +126,65 @@ contains
     ! the solids cells to therefore we find the fluid cells too. 
     q=real(q/n(dir),kind=rp)
   end subroutine calc_mean_flow_easy
+  subroutine chk_ibm(n,l,dli,dzfi,grid_vol_ratio_f,mask_u,mask_v,mask_w,u,v,w, &
+                     velmax_solid,divtot_m,divmax_m,ubulk_fl)
+    !
+    ! IBM diagnostics:
+    !   velmax_solid(1:3): max|u|, max|v|, max|w| over solid faces
+    !   divtot_m, divmax_m: divergence norms (as in chkdiv) with the solid faces zeroed
+    !   ubulk_fl: mean of u over the fluid u-faces only
+    !
+    use mpi
+    use mod_types
+    implicit none
+    integer , intent(in), dimension(3)        :: n
+    real(rp), intent(in), dimension(3)        :: l,dli
+    real(rp), intent(in), dimension(0:)       :: dzfi,grid_vol_ratio_f
+    logical , intent(in), dimension(0:,0:,0:) :: mask_u,mask_v,mask_w
+    real(rp), intent(in), dimension(0:,0:,0:) :: u,v,w
+    real(rp), intent(out)                     :: velmax_solid(3),divtot_m,divmax_m,ubulk_fl
+    real(rp) :: umax,vmax,wmax,div,vol,dxi,dyi
+    integer  :: i,j,k,ierr
+    dxi = dli(1)
+    dyi = dli(2)
+    umax = 0.; vmax = 0.; wmax = 0.
+    divtot_m = 0.; divmax_m = 0.
+    ubulk_fl = 0.; vol = 0.
+    !$acc data copy(umax,vmax,wmax,divtot_m,divmax_m,ubulk_fl,vol) async(1)
+    !$acc parallel loop collapse(3) default(present) private(div) &
+    !$acc reduction(max:umax,vmax,wmax,divmax_m) reduction(+:divtot_m,ubulk_fl,vol) async(1)
+    !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)  PRIVATE(div) &
+    !$OMP REDUCTION(max:umax,vmax,wmax,divmax_m) REDUCTION(+:divtot_m,ubulk_fl,vol)
+    do k=1,n(3)
+      do j=1,n(2)
+        do i=1,n(1)
+          if(mask_u(i,j,k)) then
+            umax = max(umax,abs(u(i,j,k)))
+          else
+            ubulk_fl = ubulk_fl + u(i,j,k)*grid_vol_ratio_f(k)
+            vol      = vol      +          grid_vol_ratio_f(k)
+          end if
+          if(mask_v(i,j,k)) vmax = max(vmax,abs(v(i,j,k)))
+          if(mask_w(i,j,k)) wmax = max(wmax,abs(w(i,j,k)))
+          div = (merge(0._rp,w(i,j,k),mask_w(i,j,k))-merge(0._rp,w(i,j,k-1),mask_w(i,j,k-1)))*dzfi(k) + &
+                (merge(0._rp,v(i,j,k),mask_v(i,j,k))-merge(0._rp,v(i,j-1,k),mask_v(i,j-1,k)))*dyi     + &
+                (merge(0._rp,u(i,j,k),mask_u(i,j,k))-merge(0._rp,u(i-1,j,k),mask_u(i-1,j,k)))*dxi
+          divmax_m = max(divmax_m,abs(div))
+          divtot_m = divtot_m + abs(div)/(dxi*dyi*dzfi(k))
+        end do
+      end do
+    end do
+    !$acc end data
+    !$acc wait(1)
+    velmax_solid(:) = [umax,vmax,wmax]
+    call MPI_ALLREDUCE(MPI_IN_PLACE,velmax_solid,3,MPI_REAL_RP,MPI_MAX,MPI_COMM_WORLD,ierr)
+    call MPI_ALLREDUCE(MPI_IN_PLACE,divmax_m,1,MPI_REAL_RP,MPI_MAX,MPI_COMM_WORLD,ierr)
+    call MPI_ALLREDUCE(MPI_IN_PLACE,divtot_m,1,MPI_REAL_RP,MPI_SUM,MPI_COMM_WORLD,ierr)
+    call MPI_ALLREDUCE(MPI_IN_PLACE,ubulk_fl,1,MPI_REAL_RP,MPI_SUM,MPI_COMM_WORLD,ierr)
+    call MPI_ALLREDUCE(MPI_IN_PLACE,vol,1,MPI_REAL_RP,MPI_SUM,MPI_COMM_WORLD,ierr)
+    divtot_m = divtot_m/product(l(:))
+    ubulk_fl = ubulk_fl/vol
+  end subroutine chk_ibm
   pure integer function f_sizeof(val) result(isize)
     !
     ! returns storage size of the scalar argument val in bytes
