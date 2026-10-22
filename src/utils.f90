@@ -57,7 +57,7 @@ contains
     integer                                   :: ierr
     mean = 0.
     vol  = 0._rp
-    !$acc data copy(mean) async(1)
+    !$acc data copy(mean,vol) async(1)
     !$acc parallel loop collapse(3) default(present) reduction(+:mean,vol) async(1)
     !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)  REDUCTION(+:mean,vol)
     do k = 1,n(3)

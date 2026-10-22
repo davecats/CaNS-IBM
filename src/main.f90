@@ -1015,15 +1015,16 @@ program cans
     !call calc_mean_flow_easy(mask_u,u,mean_u,n,dl,1)
     !call calc_mean_flow_easy(mask_v,v,mean_v,n,dl,2)
     !call calc_mean_flow_easy(mask_w,w,mean_w,n,dl,3)
-    call calc_mean_flow(grid_vol_ratio_c,mask_u,u,mean_u,n)
-    call calc_mean_flow(grid_vol_ratio_c,mask_v,v,mean_v,n)
-    call calc_mean_flow(grid_vol_ratio_f,mask_w,w,mean_w,n)
-    if(nscal>0)then
-      call calc_mean_flow(grid_vol_ratio_c,mask_s,s%val,meanscal,n)
-    endif
+    call calc_mean_flow(grid_vol_ratio_f,mask_u,u,mean_u,n)
+    call calc_mean_flow(grid_vol_ratio_f,mask_v,v,mean_v,n)
+    call calc_mean_flow(grid_vol_ratio_c,mask_w,w,mean_w,n)
     if(myid==0)then
-      print*,"mean flow for each dir: x, y, z, s",mean_u,mean_v,mean_w,meanscal
+      print*,"mean flow for each dir: x, y, z",mean_u,mean_v,mean_w
     endif
+    do iscal=1,nscal
+      call calc_mean_flow(grid_vol_ratio_f,mask_s,scalars(iscal)%val,meanscal,n)
+      if(myid==0) print*,"mean scalar ",iscal,": ",meanscal
+    end do
   endif
   !************************!
   !
