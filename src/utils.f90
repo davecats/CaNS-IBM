@@ -8,6 +8,7 @@ module mod_utils
   implicit none
   private
   public bulk_mean,f_sizeof,swap,calc_mean_flow,calc_mean_flow_easy,chk_ibm
+  public bulk_mean_ibm,bulk_forcing_ibm
 #if defined(_OPENACC)
   public device_memory_footprint
 #endif
@@ -40,6 +41,71 @@ contains
     !$acc wait(1)
     call MPI_ALLREDUCE(MPI_IN_PLACE,mean,1,MPI_REAL_RP,MPI_SUM,MPI_COMM_WORLD,ierr)
   end subroutine bulk_mean
+  subroutine bulk_mean_ibm(n,grid_vol_ratio,mask,a,p,is_intrinsic,mean,gain)
+    !
+    ! IBM-aware bulk mean of p over the non-solid points (mask = .false.), and the gain,
+    ! i.e. the mean response to a unit impulse added as 1/a (see `bulk_forcing_ibm`);
+    ! both are normalized by the box volume (superficial) or the fluid volume (intrinsic)
+    !
+    use mpi
+    use mod_types
+    implicit none
+    integer , intent(in), dimension(3)        :: n
+    real(rp), intent(in), dimension(0:)       :: grid_vol_ratio
+    logical , intent(in), dimension(0:,0:,0:) :: mask
+    real(rp), intent(in), dimension(0:,0:,0:) :: a,p
+    logical , intent(in)                      :: is_intrinsic
+    real(rp), intent(out)                     :: mean,gain
+    real(rp) :: vol,buf(3)
+    integer  :: i,j,k,ierr
+    mean = 0.; gain = 0.; vol = 0.
+    !$acc data copy(mean,gain,vol) async(1)
+    !$acc parallel loop collapse(3) default(present) reduction(+:mean,gain,vol) async(1)
+    !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)  REDUCTION(+:mean,gain,vol)
+    do k=1,n(3)
+      do j=1,n(2)
+        do i=1,n(1)
+          if(.not.mask(i,j,k)) then
+            mean = mean + p(i,j,k)*grid_vol_ratio(k)
+            gain = gain + grid_vol_ratio(k)/a(i,j,k)
+            vol  = vol  + grid_vol_ratio(k)
+          end if
+        end do
+      end do
+    end do
+    !$acc end data
+    !$acc wait(1)
+    buf(:) = [mean,gain,vol]
+    call MPI_ALLREDUCE(MPI_IN_PLACE,buf,3,MPI_REAL_RP,MPI_SUM,MPI_COMM_WORLD,ierr)
+    mean = buf(1); gain = buf(2); vol = buf(3)
+    if(is_intrinsic) then
+      mean = mean/vol
+      gain = gain/vol
+    end if
+  end subroutine bulk_mean_ibm
+  subroutine bulk_forcing_ibm(n,mask,a,ff,p)
+    !
+    ! adds the bulk forcing impulse ff to p as the exact IB scheme would integrate it,
+    ! ff/a, at the non-solid points only
+    !
+    use mod_types
+    implicit none
+    integer , intent(in   ), dimension(3)        :: n
+    logical , intent(in   ), dimension(0:,0:,0:) :: mask
+    real(rp), intent(in   ), dimension(0:,0:,0:) :: a
+    real(rp), intent(in   )                      :: ff
+    real(rp), intent(inout), dimension(0:,0:,0:) :: p
+    integer :: i,j,k
+    !$acc parallel loop collapse(3) default(present) async(1)
+    !$OMP parallel do   collapse(3) DEFAULT(shared)
+    do k=1,n(3)
+      do j=1,n(2)
+        do i=1,n(1)
+          if(.not.mask(i,j,k)) p(i,j,k) = p(i,j,k) + ff/a(i,j,k)
+        end do
+      end do
+    end do
+  end subroutine bulk_forcing_ibm
   subroutine calc_mean_flow(grid_vol_ratio,mask_id,field_id,mean,n)
     !
     ! compute the mean value of an observable over the entire domain

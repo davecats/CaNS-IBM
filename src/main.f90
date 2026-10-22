@@ -79,6 +79,7 @@ program cans
                                  n_wave,           &
                                  amp_l,            &
                                  phase_l,          &
+                                 bulk_vel_def,     &
                                  use_hmap,         &
                                  override_grid,     &
                                  hmap_name          
@@ -94,7 +95,8 @@ program cans
 #endif
   use mod_updatep        , only: updatep
   use mod_utils          , only: bulk_mean,calc_mean_flow,&
-                                 calc_mean_flow_easy,chk_ibm
+                                 calc_mean_flow_easy,chk_ibm, &
+                                 bulk_mean_ibm,bulk_forcing_ibm
 #if defined(_OPENACC)
   use mod_utils          , only: device_memory_footprint
 #endif
@@ -146,6 +148,8 @@ program cans
   type(scalar), target, allocatable, dimension(:) :: scalars
   type(scalar), pointer :: s
   real(rp) :: meanscal
+  real(rp) :: gain
+  logical  :: is_intrinsic
   real(rp), allocatable, dimension(:) :: fs
   integer :: iscal,is,nscalibm
   !
@@ -732,8 +736,12 @@ program cans
         if(ibm_2nd) call calc_a_b(lap_s,A_s,B_s,dtrk,s%alpha,dl) ! A_s, B_s depend on the diffusivity
         call rk_scal(rkcoeff(:,irk),n,dli,l,dzci,dzfi,grid_vol_ratio_f,s%alpha,dt,is_bound,u,v,w, &
                      s%is_forced,s%scalf,s%source,s%fluxo,s%dsdtrko,s%val,s%f,A_s,B_s, &
-                     bcscal_ibm(iscal),scal_mean_grad(iscal))
-        call bulk_forcing_s(n,s%is_forced,s%f,s%val)
+                     bcscal_ibm(iscal),scal_mean_grad(iscal),mask_s)
+        if(is_ibm) then
+          if(s%is_forced) call bulk_forcing_ibm(n,mask_s,A_s,s%f,s%val)
+        else
+          call bulk_forcing_s(n,s%is_forced,s%f,s%val)
+        end if
         fs(iscal) = fs(iscal) + s%f
         if(is_impdiff) then
           call solve_helmholtz(n,ng,hi,s%arrplan,s%normfft,-0.5*s%alpha*dtrk, &
@@ -743,8 +751,14 @@ program cans
       end do
       call rk(rkcoeff(:,irk),n,dli,dzci,dzfi,grid_vol_ratio_c,grid_vol_ratio_f,dt,visc,p, &
               is_forced,velf,bforce,gacc,beta,scalars,dudtrko,dvdtrko,dwdtrko,u,v,w,f,&
-              A_u,A_v,A_w,B_u,B_v,B_w)
-      call bulk_forcing(n,is_forced,f,u,v,w)
+              A_u,A_v,A_w,B_u,B_v,B_w,mask_u,mask_v,mask_w)
+      if(is_ibm) then
+        if(is_forced(1)) call bulk_forcing_ibm(n,mask_u,A_u,f(1),u)
+        if(is_forced(2)) call bulk_forcing_ibm(n,mask_v,A_v,f(2),v)
+        if(is_forced(3)) call bulk_forcing_ibm(n,mask_w,A_w,f(3),w)
+      else
+        call bulk_forcing(n,is_forced,f,u,v,w)
+      end if
       dpdl(:) = dpdl(:) + f(:)
       if(is_impdiff) then
         alpha = -.5*visc*dtrk
@@ -846,14 +860,27 @@ program cans
         meanvelu = 0.
         meanvelv = 0.
         meanvelw = 0.
-        if(is_forced(1).or.abs(bforce(1)) > 0.) then
-          call bulk_mean(n,grid_vol_ratio_f,u,meanvelu)
-        end if
-        if(is_forced(2).or.abs(bforce(2)) > 0.) then
-          call bulk_mean(n,grid_vol_ratio_f,v,meanvelv)
-        end if
-        if(is_forced(3).or.abs(bforce(3)) > 0.) then
-          call bulk_mean(n,grid_vol_ratio_c,w,meanvelw)
+        if(is_ibm) then ! fluid-only mean, as controlled by the IBM bulk forcing
+          is_intrinsic = trim(bulk_vel_def) == 'intrinsic'
+          if(is_forced(1).or.abs(bforce(1)) > 0.) then
+            call bulk_mean_ibm(n,grid_vol_ratio_f,mask_u,A_u,u,is_intrinsic,meanvelu,gain)
+          end if
+          if(is_forced(2).or.abs(bforce(2)) > 0.) then
+            call bulk_mean_ibm(n,grid_vol_ratio_f,mask_v,A_v,v,is_intrinsic,meanvelv,gain)
+          end if
+          if(is_forced(3).or.abs(bforce(3)) > 0.) then
+            call bulk_mean_ibm(n,grid_vol_ratio_c,mask_w,A_w,w,is_intrinsic,meanvelw,gain)
+          end if
+        else
+          if(is_forced(1).or.abs(bforce(1)) > 0.) then
+            call bulk_mean(n,grid_vol_ratio_f,u,meanvelu)
+          end if
+          if(is_forced(2).or.abs(bforce(2)) > 0.) then
+            call bulk_mean(n,grid_vol_ratio_f,v,meanvelv)
+          end if
+          if(is_forced(3).or.abs(bforce(3)) > 0.) then
+            call bulk_mean(n,grid_vol_ratio_c,w,meanvelw)
+          end if
         end if
         if(.not.any(is_forced(:))) dpdl(:) = -bforce(:) ! constant pressure gradient
         var(1)   = time
@@ -867,7 +894,11 @@ program cans
         write(scalnum,'(i3.3)') iscal
         if(s%is_forced.or.abs(s%source) > 0.) then
           meanscal = 0.
-          call bulk_mean(n,grid_vol_ratio_f,s%val,meanscal)
+          if(is_ibm) then
+            call bulk_mean_ibm(n,grid_vol_ratio_f,mask_s,A_s,s%val,trim(bulk_vel_def) == 'intrinsic',meanscal,gain)
+          else
+            call bulk_mean(n,grid_vol_ratio_f,s%val,meanscal)
+          end if
           if(.not.s%is_forced) fs(:) = s%source
           var(1:3) = [time,fs(iscal),meanscal]
           call out0d(trim(datadir)//'forcing_s_'//scalnum//'.out',3,var)

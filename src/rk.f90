@@ -18,16 +18,17 @@ module mod_rk
                        momx_d_z ,momy_d_z ,momz_d_z, &
                        mom_xyz_ad
   use mod_param, only: is_impdiff,is_impdiff_1d,is_boussinesq_buoyancy,is_fast_mom_kernels,ibm_2nd,is_ibm,const_scal, &
-                       adv_form
+                       adv_form,bulk_vel_def
   use mod_scal , only: scal,cmpt_scalflux,scalar
-  use mod_utils, only: bulk_mean
+  use mod_utils, only: bulk_mean,bulk_mean_ibm
   use mod_types
   implicit none
   public rk,rk_scal
   contains
   subroutine rk(rkpar,n,dli,dzci,dzfi,grid_vol_ratio_c,grid_vol_ratio_f,dt,visc,p, &
                 is_forced,velf,bforce,gacc,beta,scalars,dudtrko,dvdtrko,dwdtrko,u,v,w,f,&
-                A_u,A_v,A_w,B_u,B_v,B_w)!2ndIBM additions
+                A_u,A_v,A_w,B_u,B_v,B_w, &!2ndIBM additions
+                mask_u,mask_v,mask_w)
 #if defined(_OPENACC)
     use mod_common_cudecomp, only: dudtrk_t => work, &
                                    dvdtrk_t => solver_buf_0, &
@@ -70,6 +71,7 @@ module mod_rk
     real(rp),intent(in) :: B_u(0:,0:,0:)
     real(rp),intent(in) :: B_v(0:,0:,0:)
     real(rp),intent(in) :: B_w(0:,0:,0:)
+    logical ,intent(in), dimension(0:,0:,0:), optional :: mask_u,mask_v,mask_w ! present if is_ibm
     !
     factor1 = rkpar(1)*dt
     factor2 = rkpar(2)*dt
@@ -397,7 +399,12 @@ module mod_rk
     !
     ! compute bulk velocity forcing
     !
-    call cmpt_bulk_forcing(n,is_forced,velf,grid_vol_ratio_c,grid_vol_ratio_f,u,v,w,f)
+    if(is_ibm) then
+      call cmpt_bulk_forcing_ibm(n,is_forced,velf,grid_vol_ratio_c,grid_vol_ratio_f, &
+                                 mask_u,mask_v,mask_w,A_u,A_v,A_w,u,v,w,f)
+    else
+      call cmpt_bulk_forcing(n,is_forced,velf,grid_vol_ratio_c,grid_vol_ratio_f,u,v,w,f)
+    end if
     !
     if(is_impdiff) then
       !
@@ -418,7 +425,7 @@ module mod_rk
   end subroutine rk
   !
   subroutine rk_scal(rkpar,n,dli,l,dzci,dzfi,grid_vol_ratio_f,alpha,dt,is_bound,u,v,w, &
-                     is_forced,scalf,ssource,fluxo,dsdtrko,s,f,A_s,B_s,sw,sgrad)
+                     is_forced,scalf,ssource,fluxo,dsdtrko,s,f,A_s,B_s,sw,sgrad,mask_s)
 #if defined(_OPENACC)
     use mod_common_cudecomp, only: dsdtrk_t => work
 #endif
@@ -458,6 +465,8 @@ module mod_rk
     real(rp),intent(in) :: B_s(0:,0:,0:)
     real(rp),intent(in) :: sw ! IBM wall value; the IB term relaxes s - sw, hence the (A_s-B_s)*sw term
     real(rp),intent(in) :: sgrad ! imposed mean streamwise gradient (used if .not.const_scal)
+    logical ,intent(in), dimension(0:,0:,0:), optional :: mask_s ! present if is_ibm
+    real(rp) :: gain
     !
     factor1 = rkpar(1)*dt
     factor2 = rkpar(2)*dt
@@ -564,8 +573,13 @@ module mod_rk
     ! bulk scalar forcing
     !
     if(is_forced) then
-      call bulk_mean(n,grid_vol_ratio_f,s(:,:,:),mean)
-      f = scalf - mean
+      if(is_ibm) then
+        call bulk_mean_ibm(n,grid_vol_ratio_f,mask_s,A_s,s(:,:,:),trim(bulk_vel_def) == 'intrinsic',mean,gain)
+        f = (scalf - mean)/gain
+      else
+        call bulk_mean(n,grid_vol_ratio_f,s(:,:,:),mean)
+        f = scalf - mean
+      end if
     end if
     if(is_impdiff) then
       !
@@ -622,6 +636,41 @@ module mod_rk
       f(3) = velf(3) - mean
     end if
   end subroutine cmpt_bulk_forcing
+  !
+  subroutine cmpt_bulk_forcing_ibm(n,is_forced,velf,grid_vol_ratio_c,grid_vol_ratio_f, &
+                                   mask_u,mask_v,mask_w,A_u,A_v,A_w,u,v,w,f)
+    !
+    ! IBM-aware bulk velocity forcing: the impulse f, added as f/A at the fluid points
+    ! (`bulk_forcing_ibm`), brings the fluid-only bulk velocity exactly to velf;
+    ! the solid points, zeroed afterwards, are excluded from the mean
+    !
+    implicit none
+    integer , intent(in   ), dimension(3) :: n
+    logical , intent(in   ), dimension(3) :: is_forced
+    real(rp), intent(in   ), dimension(3) :: velf
+    real(rp), intent(in   ), dimension(0:) :: grid_vol_ratio_c,grid_vol_ratio_f
+    logical , intent(in   ), dimension(0:,0:,0:) :: mask_u,mask_v,mask_w
+    real(rp), intent(in   ), dimension(0:,0:,0:) :: A_u,A_v,A_w
+    real(rp), intent(in   ), dimension(0:,0:,0:) :: u,v,w
+    real(rp), intent(out  ), dimension(3) :: f
+    real(rp) :: mean,gain
+    logical  :: is_intrinsic
+    !
+    is_intrinsic = trim(bulk_vel_def) == 'intrinsic'
+    f(:) = 0.
+    if(is_forced(1)) then
+      call bulk_mean_ibm(n,grid_vol_ratio_f,mask_u,A_u,u,is_intrinsic,mean,gain)
+      f(1) = (velf(1) - mean)/gain
+    end if
+    if(is_forced(2)) then
+      call bulk_mean_ibm(n,grid_vol_ratio_f,mask_v,A_v,v,is_intrinsic,mean,gain)
+      f(2) = (velf(2) - mean)/gain
+    end if
+    if(is_forced(3)) then
+      call bulk_mean_ibm(n,grid_vol_ratio_c,mask_w,A_w,w,is_intrinsic,mean,gain)
+      f(3) = (velf(3) - mean)/gain
+    end if
+  end subroutine cmpt_bulk_forcing_ibm
   !
   subroutine cmpt_bulk_forcing_alternative(rkpar,n,dli,l,dzci,dzfi,dt,visc,is_bound,is_forced,u,v,w,tauxo,tauyo,tauzo,f,is_first)
     !

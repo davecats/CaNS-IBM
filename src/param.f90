@@ -126,6 +126,7 @@ real(rp), protected   :: l_0(0:1,3)=0._rp
 integer, protected    :: n_wave(0:1,3)=0._rp
 real(rp), protected   :: amp_l(0:1,3)=0._rp
 real(rp), protected   :: phase_l(0:1,3)=0._rp
+character(len=16), protected :: bulk_vel_def = 'superficial' ! IBM bulk velocity: 'superficial' or 'intrinsic'
 !hmap
 logical,protected     :: use_hmap=.false.
 character(len=25), protected :: hmap_mode="fit"
@@ -198,7 +199,8 @@ contains
                             l_0,              &
                             n_wave,           &
                             amp_l,            &
-                            phase_l
+                            phase_l,          &
+                            bulk_vel_def
     namelist /hmap/ &
                             use_hmap,         &
                             hmap_mode,        &        

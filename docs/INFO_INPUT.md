@@ -205,6 +205,8 @@ These lines set the flow forcing.
 
 `velf` is the **target bulk velocity** in the direction in question (where `is_forced` is true). The three values correspond to the three domain directions.
 
+With the immersed-boundary method (`&ibm is_ibm = T`), the bulk velocity is the mean over the fluid points only, and the forcing impulse is added as the exact IB scheme integrates it (divided by the IB coefficient `A` near the wall, and not at all at the solid points), so the fluid bulk velocity matches `velf` exactly before the pressure projection. `&ibm bulk_vel_def` selects the normalization: `'superficial'` (default; divided by the box volume) or `'intrinsic'` (divided by the fluid volume). The same applies to `scalf` for the scalars. The output `forcing.out` reports this fluid-only mean.
+
 ---
 
 ```fortran
