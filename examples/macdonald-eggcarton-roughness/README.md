@@ -51,6 +51,7 @@ In the reference run, the wall drag from `data/ibm_force.out` gives u<sub>τ</su
 | `run_horeka.sh` | SLURM job script used for the reference runs (1 node, 4 × A100) |
 | `mac_analyse.py` | time- and plane-averaged profiles and bulk quantities from `data/` |
 | `mac_compare.py` | comparison with the paper (table of numbers, figure) |
+| `mac_wall.py` | phase-averaged wall shear stress and wall pressure over one roughness element, from `FV-fric_*` |
 | `reference/present_rough.dat`, `reference/present_smooth.dat` | mean profiles of the reference runs |
 | `reference/macdonald2019_fig2_digitised.dat` | the paper's full-span profiles (figure 2), digitised |
 | `reference/present_vs_paper.png` | figure produced by `mac_compare.py` for the reference runs |
@@ -90,12 +91,12 @@ A small laptop test (one GPU, about 1 M points): `python3 make_input.py rough cf
 
 Notes:
 - The per-point wall outputs (`fric-*`, `pressure*`, `FV-fric_*`, wall-stress map) are off (`ibm_iout_wall = 0`).
-  At this size one `FV-fric` snapshot is about 4 GB, and their set-up costs several minutes. Set
-  `ibm_iout_wall` to a positive interval for a few snapshots.
+  At this size one snapshot of them is about 4.4 GB of text (2.1 GB of it `FV-fric`), and their set-up costs several
+  minutes. Set `ibm_iout_wall` to a positive interval for a few snapshots (see *Local wall stress and pressure*).
 - `turb_stats_ibm_<step>.out` (intrinsic averages and fluid fractions) and `scal_01_mean_fld_<step>.out`
   (superficial scalar mean) are plane averages of single snapshots, written every `iout1d` steps; `mac_analyse.py`
   averages them in time and folds the two halves of the channel.
-- The restart files (`data/fld_*.bin`, about 5 GB for the rough channel) are not included.
+- The restart files (`data/fld_*.bin`, 2.5 GB for the rough channel, single precision) are not included.
 
 ## Cost of the reference runs
 
@@ -152,6 +153,33 @@ Summary:
   `mac_analyse.py` reports, gives 11.12. Table 1's U<sub>bf</sub><sup>+</sup> = 10.5 is not this integral. It is an "expected full-span"
   value from a composite profile (Nagib & Chauhan 2008) fitted to the data (paper §§2 and 4.2). The paper's own
   full-span profile in figure 2 integrates to about 11.06. Compare the profiles, ΔU<sup>+</sup> and ΔΘ<sup>+</sup>, not U<sub>bf</sub><sup>+</sup>.
+
+## Local wall stress and pressure
+
+A restart of the rough run with the per-cell wall force on (`make_input.py rough cpg restart=T twmax=1.9 iout1d=2000
+isave=1000000 iwall=2000`, 2 h on HoreKA) writes 34 snapshots of `FV-fric_*` over t = 563–580 h/u<sub>τ</sub>, then
+
+```
+python3 mac_wall.py <run dir> --out wall.npz      # add --dtlog <log> for output of builds before e7e9133
+```
+
+splits the force of each cut cell into its normal (pressure) and tangential (viscous) parts, averages them over the
+cut cells of each (x, y) column, and phase-averages over the 128 elements of both walls (32 × 32 columns per element).
+The result is in `reference/present_wall_element.dat`.
+
+| quantity | present | MacDonald et al. (2019) |
+|---|---|---|
+| drag per wall and plan area, F<sub>T</sub>/(ρu<sub>τ</sub><sup>2</sup>A) | 0.994 | 1 by definition |
+| pressure drag F<sub>p</sub>/F<sub>T</sub> | 0.576 | ≈ 0.55 (figure 8a, k<sub>s</sub><sup>+</sup> ≈ 90) |
+| C<sub>dk</sub> = 2/U<sub>k</sub><sup>+2</sup> | 0.085 | ≈ 0.09 (figure 8b) |
+| plan area with mean τ<sub>x</sub> < 0 | 42 % | – |
+| peak τ<sub>x</sub><sup>+</sup> (just upstream of the crest) | 3.6 | – |
+| wall pressure, p<sub>w</sub><sup>+</sup> − ⟨p<sub>w</sub><sup>+</sup>⟩ | +4.5 windward face, −6.4 crest top | – |
+
+The paper shows wall shear maps only for larger roughness (figure 9, k<sup>+</sup> ≈ 33 and 93). The reference snapshots
+were written before the fix e7e9133 (on steps that are multiples of `icheck` the per-cell force used the time step of
+the next step) and were rescaled with `--dtlog`; each snapshot's lower-wall total then matches the exact wall-stress
+map `ibm_wall_stress_*.out` to 0.1 %.
 
 ### Columns of `reference/present_*.dat`
 
