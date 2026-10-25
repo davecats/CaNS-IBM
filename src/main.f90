@@ -145,6 +145,7 @@ program cans
   character(len=6) :: impart
   real(rp), allocatable, dimension(:,:,:) :: imp_map ! column-integrated IB force (x,y) of the lower wall
   real(rp) :: imp_ibm(2,2,3),imp_leak(2,2,3),pi_drive(3) ! IB force: (lower/upper half, fluid/solid, component)
+  real(rp) :: dti_step ! 1/dt of the last time step (dti may change before the output)
   integer :: irk,istep,iunit
   real(rp), allocatable, dimension(:) :: dzc  ,dzf  ,zc  ,zf  ,dzci  ,dzfi, &
                                          dzc_g,dzf_g,zc_g,zf_g,dzci_g,dzfi_g, &
@@ -940,6 +941,7 @@ program cans
       call updatep(n,dli,dzci,dzfi,alpha,pp,p)
       call boundp(cbcpre,n,bcpre,nb,is_bound,dl,dzc,p)
     end do
+    dti_step    = dti
     dpdl(:)     = -dpdl(:)*dti
     fs(1:nscal) = fs(1:nscal)*dti
     if(is_ibm_force) then
@@ -1132,7 +1134,7 @@ program cans
         call write_data(trim(datadir)//"pressure"//fldnum//".out",myid,p_grad_g)
       endif
       !FV method for calculating the wall friction 
-      call calc_wall_force(n,lo,l,dti,pi_drive,mask_s,frifv,frifvout) ! exact wall force per cell of this step
+      call calc_wall_force(n,lo,l,dti_step,pi_drive,mask_s,frifv,frifvout) ! exact wall force per cell of this step
       call writeFVfric(trim(datadir)//'FV-fric_'//trim(mpiranknum)//'_s_'//fldnum//'.out',frifvout)
       ! wall stress map of the lower wall from the exact IB force of this time step
       if(ibm_direction(0,3)) &
