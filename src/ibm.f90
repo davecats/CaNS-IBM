@@ -219,7 +219,7 @@ module mod_ibm
 
     end subroutine get_hmap_loc
 
-    ! 1st order IBM 
+    ! staircase masks: .true. at the solid points
     ! we change the diL depending the velocity mask we are handling 
     ! e.g. we need to apply 1,0,0 for mask_u and we need to apply 0,1,0 for mask_v 
     ! 0,0,1 for mask_w

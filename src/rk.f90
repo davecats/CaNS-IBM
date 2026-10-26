@@ -17,7 +17,7 @@ module mod_rk
                        momx_d_xy,momy_d_xy,momz_d_xy, &
                        momx_d_z ,momy_d_z ,momz_d_z, &
                        mom_xyz_ad
-  use mod_param, only: is_impdiff,is_impdiff_1d,is_boussinesq_buoyancy,is_fast_mom_kernels,ibm_2nd,is_ibm,const_scal, &
+  use mod_param, only: is_impdiff,is_impdiff_1d,is_boussinesq_buoyancy,is_fast_mom_kernels,is_ibm,const_scal, &
                        adv_form,bulk_vel_def,ibm_ab_form
   use mod_scal , only: scal,cmpt_scalflux,scalar
   use mod_utils, only: bulk_mean,bulk_mean_ibm
@@ -178,7 +178,7 @@ module mod_rk
     do k=1,n(3)
       do j=1,n(2)
         do i=1,n(1)
-          if(.not.ibm_2nd)then
+          if(.not.is_ibm)then
           u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
                                 factor12*(bforce(1) - dli(1)*( p(i+1,j,k)-p(i,j,k)))
           else
@@ -186,14 +186,14 @@ module mod_rk
                                 factor12*(bforce(1) - dli(1)*( p(i+1,j,k)-p(i,j,k))))/A_u(i,j,k)
           endif                                
           if(is_buoyancy) then
-            if(ibm_2nd)then
+            if(is_ibm)then
               u(i,j,k) = u(i,j,k) - factor12*gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k))/A_u(i,j,k)
             else
               u(i,j,k) = u(i,j,k) - factor12*gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k))
             endif
           endif
           !
-          if(.not.ibm_2nd)then
+          if(.not.is_ibm)then
           v(i,j,k) = v(i,j,k) + factor1*dvdtrk(i,j,k) + factor2*dvdtrko(i,j,k) + &
                                 factor12*(bforce(2) - dli(2)*( p(i,j+1,k)-p(i,j,k)))
           else
@@ -201,14 +201,14 @@ module mod_rk
                                 factor12*(bforce(2) - dli(2)*( p(i,j+1,k)-p(i,j,k))))/A_v(i,j,k)                                            
           endif
           if(is_buoyancy) then
-            if(ibm_2nd)then
+            if(is_ibm)then
               v(i,j,k) = v(i,j,k) - factor12*gacc(2)*beta*0.5*(s(i,j+1,k)+s(i,j,k))/A_v(i,j,k)
             else
               v(i,j,k) = v(i,j,k) - factor12*gacc(2)*beta*0.5*(s(i,j+1,k)+s(i,j,k))
             endif
           endif
           !
-          if(.not.ibm_2nd)then
+          if(.not.is_ibm)then
           w(i,j,k) = w(i,j,k) + factor1*dwdtrk(i,j,k) + factor2*dwdtrko(i,j,k) + &
                                 factor12*(bforce(3) - dzci(k)*(p(i,j,k+1)-p(i,j,k)))
           else
@@ -216,7 +216,7 @@ module mod_rk
                                 factor12*(bforce(3) - dzci(k)*(p(i,j,k+1)-p(i,j,k))))/A_w(i,j,k)
           endif
           if(is_buoyancy) then
-            if(ibm_2nd)then
+            if(is_ibm)then
               w(i,j,k) = w(i,j,k) - factor12*gacc(3)*beta*0.5*(s(i,j,k+1)+s(i,j,k))/A_w(i,j,k)
             else
               w(i,j,k) = w(i,j,k) - factor12*gacc(3)*beta*0.5*(s(i,j,k+1)+s(i,j,k))
@@ -224,7 +224,7 @@ module mod_rk
           endif
           !
           if(is_impdiff) then
-            if(.not.ibm_2nd)then
+            if(.not.is_ibm)then
               u(i,j,k) = u(i,j,k) + factor12*dudtrkd(i,j,k)
               v(i,j,k) = v(i,j,k) + factor12*dvdtrkd(i,j,k)
               w(i,j,k) = w(i,j,k) + factor12*dwdtrkd(i,j,k)
@@ -244,7 +244,7 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            if(.not.ibm_2nd)then
+            if(.not.is_ibm)then
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
                                   factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)))
             v(i,j,k) = v(i,j,k) + factor1*dvdtrk(i,j,k) + factor2*dvdtrko(i,j,k) + &
@@ -268,7 +268,7 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            if(.not.ibm_2nd)then
+            if(.not.is_ibm)then
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
                                   factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)) + &
                                             dudtrkd(i,j,k))
@@ -298,7 +298,7 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            if(.not.ibm_2nd)then
+            if(.not.is_ibm)then
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
                                   factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)) &
                                           - gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k)))
@@ -328,7 +328,7 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            if(.not. ibm_2nd)then
+            if(.not.is_ibm)then
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
                                   factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)) &
                                           - gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k)) + &
@@ -415,9 +415,9 @@ module mod_rk
     if(is_impdiff) then
       !
       ! compute rhs of Helmholtz equation
-      ! (with ibm_2nd: rhs/A, as `solve_helmholtz_ibm` multiplies it by A)
+      ! (with the IBM: rhs/A, as `solve_helmholtz_ibm` multiplies it by A)
       !
-      if(.not.ibm_2nd) then
+      if(.not.is_ibm) then
         !$acc parallel loop collapse(3) default(present) async(1)
         !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
         do k=1,n(3)
@@ -611,7 +611,7 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            s(i,j,k) = s(i,j,k) - .5_rp*factor12*dsdtrkd(i,j,k)/A_s(i,j,k) ! rhs/A (A = 1 without ibm_2nd)
+            s(i,j,k) = s(i,j,k) - .5_rp*factor12*dsdtrkd(i,j,k)/A_s(i,j,k) ! rhs/A (A = 1 without the IBM)
           end do
         end do
       end do
@@ -786,7 +786,7 @@ module mod_rk
             ! B = ksi/(exp(ksi)-1): Taylor series for small ksi (avoids the cancellation
             ! in exp(ksi)-1), exp(-ksi) form for large ksi (avoids the overflow);
             ! `ibm_ab_form = 'taylor'`: B = 1/(1+ksi/2+ksi**2/6) for all ksi, as in AMPHIBIOUS
-            ! (with the same lower bound on ksi, never active for the laplacian >= 0 of set_ibm_2nd)
+            ! (with the same lower bound on ksi, never active for the laplacian >= 0 of `set_ibm_2nd`)
             if(is_taylor)then
               ksi_l=max(ksi_l,ksi_min)
               B_id(i,j,k)=1._rp/((ksi_l/6._rp+0.5_rp)*ksi_l+1._rp)

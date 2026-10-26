@@ -65,7 +65,6 @@ io_backend = 'mpiio'
 
 &ibm
 is_ibm = F
-ibm_2nd = F
 do_richardson = T
 ibm_direction = F,F, F,F, T,T
 l_0 = 0.0,0.0, 0.0,0.0, 0.0,2.0

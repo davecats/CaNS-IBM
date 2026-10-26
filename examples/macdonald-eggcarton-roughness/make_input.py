@@ -83,7 +83,6 @@ io_backend = 'mpiio'
 
 &ibm
 is_ibm = {T if rough else F}
-ibm_2nd = {T if rough else F}
 do_richardson = T
 ibm_direction = F,F, F,F, T,T
 l_0 = 0.0,0.0, 0.0,0.0, 0.0,{lz!r}

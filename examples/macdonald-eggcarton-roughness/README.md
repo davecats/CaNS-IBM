@@ -27,7 +27,7 @@ paper). In CaNS-IBM the solid fills the box up to z<sub>w</sub>: with `ibm_shape
 `l_0 + amp (1 + cos cos)` and the upper wall `L_z − amp (1 − cos cos)`, so the mean heights are at z = k and z = L<sub>z</sub> − k,
 2h = 2 apart. All lengths are in units of h, velocities in u<sub>τ</sub> (ν = 1/395).
 
-Numerics: second-order IBM (`ibm_2nd = T`), `adv_form = 'vv'`, z-implicit diffusion with the IB inside the
+Numerics: second-order IBM, `adv_form = 'vv'`, z-implicit diffusion with the IB inside the
 operator (`is_impdiff = T, is_impdiff_1d = T`; needs `dims(2) = 1`), `ibm_proj = 'damped'` for the rough case.
 The paper uses a body-fitted grid with N<sub>z</sub> = 320.
 

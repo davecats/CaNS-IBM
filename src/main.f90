@@ -74,7 +74,6 @@ program cans
                                  is_poisson_pcr_tdma,      &
                                  is_mask_divergence_check, &
                                  is_ibm,           &
-                                 ibm_2nd,          &
                                  do_richardson,    &
                                  ibm_direction,    &
                                  l_0,              &
@@ -577,7 +576,7 @@ program cans
   
   if(is_ibm)then
     ! we fill the ibm masks here
-    print*, "***1stOrder IBM coefficients are deploying***"
+    print*, "***IBM masks are deploying***"
     call set_ibm_staircase(lo,mask_u,1,0,0,n,l,dl,&
     ibm_direction,amp_l,n_wave,l_0,phase_l,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,zc,zf)
     call set_ibm_staircase(lo,mask_v,0,1,0,n,l,dl,&
@@ -593,7 +592,7 @@ program cans
     !$acc enter data create(imp_map)
   endif
   if(is_ibm)then
-    print*, "***2nd Order IBM coefficients are deploying***"
+    print*, "***IBM coefficients are deploying***"
     call set_ibm_2nd(lo,mask_u,lap_u,1,0,0&
         ,n,l,dl,ibm_direction,amp_l,n_wave,l_0,phase_l,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,zc,zf,dzc,dzf,use_hmap,band_u)
     call set_ibm_2nd(lo,mask_v,lap_v,0,1,0&
@@ -656,10 +655,6 @@ program cans
     !$acc enter data copyin(band_s,band_u)
 #endif
     write(mpiranknum,'(i7.7)') myid !for naming the rank based output
-  endif
-  if(ibm_2nd .and. .not.is_ibm)then
-    if(myid == 0) print*, "ERROR: ibm_2nd requires is_ibm = T"
-    error stop
   endif
   if(is_ibm .and. is_impdiff_1d)then
     ! the IB-aware z-implicit solve (`solve_helmholtz_ibm`) needs whole z columns on each task
@@ -803,7 +798,7 @@ program cans
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
       !*******************!
       !****//IBM-2nd\\****!
-      if(ibm_2nd)then
+      if(is_ibm)then
         call timer_tic('ibm_calc_a_b',nvtx_color='r',nvtx_gpu_stream=-1)
         call calc_a_b(lap_u,A_u,B_u,dtrk,visc,dl)
         call calc_a_b(lap_v,A_v,B_v,dtrk,visc,dl)
@@ -825,7 +820,7 @@ program cans
       !*******************!
       do iscal=1,nscal
         s => scalars(iscal)
-        if(ibm_2nd) then
+        if(is_ibm) then
           call timer_tic('ibm_calc_a_b',nvtx_color='r',nvtx_gpu_stream=-1)
           call calc_a_b(lap_s,A_s,B_s,dtrk,s%alpha,dl) ! A_s, B_s depend on the diffusivity
           call timer_toc('ibm_calc_a_b',nvtx_gpu_stream=-1)
