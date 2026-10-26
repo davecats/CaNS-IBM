@@ -30,7 +30,7 @@ program cans
   use, intrinsic :: ieee_arithmetic, only: is_nan => ieee_is_nan
   use mpi
   use decomp_2d
-  use mod_bound          , only: boundp,bounduvw,updt_rhs_b
+  use mod_bound          , only: boundp,bounduvw,bounduvw_norm,updt_rhs_b
   use mod_chkdiv         , only: chkdiv
   use mod_chkdt          , only: chkdt
   use mod_common_mpi     , only: myid,ierr,dinfo_ptdma
@@ -140,7 +140,7 @@ program cans
   !
   real(rp) :: dt,dti,dt_cfl,time,dtrk,dtrki,divtot,divmax
   real(rp) :: velmax_solid(3),divtot_m,divmax_m,ubulk_fl
-  logical  :: is_ibm_force,is_ibm_map
+  logical  :: is_ibm_force,is_ibm_map,is_first_stage,is_zero_vel
   integer  :: iout_wall = 0 ! interval of the per-point IB wall outputs
   character(len=6) :: impart
   real(rp), allocatable, dimension(:,:,:) :: imp_map ! column-integrated IB force (x,y) of the lower wall
@@ -742,6 +742,7 @@ program cans
   !
   if(myid == 0) print*, '*** Calculation loop starts now ***'
   is_done = .false.
+  is_first_stage = .true.
   do while(.not.is_done)
     if(is_timing) then
       !$acc wait(1)
@@ -767,6 +768,7 @@ program cans
       dtrk = sum(rkcoeff(:,irk))*dt
       dtrki = dtrk**(-1)
       !****//IBM\\****!
+      is_zero_vel = is_ibm .and. (is_first_stage .or. trim(ibm_proj) == 'none')
       if(is_ibm)then
         call timer_tic('ibm_stage_start',nvtx_color='r',nvtx_gpu_stream=-1)
         if(is_ibm_force) then ! velocity the projection left in the solid
@@ -786,18 +788,36 @@ program cans
           call wf_scatter('leak',2,dli,dzci,grid_vol_ratio_f,mask_v,A_v,B_v,fac_wf,0._rp,pp,v)
           call wf_scatter('leak',3,dli,dzci,grid_vol_ratio_c,mask_w,A_w,B_w,fac_wf,0._rp,pp,w)
         end if
-        call apply_ibm_staircase(u,mask_u,dtrk)
-        call apply_ibm_staircase(v,mask_v,dtrk)
-        call apply_ibm_staircase(w,mask_w,dtrk)
-        do nscalibm=1,nscal
-          call apply_ibm_staircase_scalar(scalars(nscalibm)%val,&
-              mask_s,bcscal_ibm(nscalibm))
-        end do 
+        !
+        ! zero the solid points; after the first stage the scalar still holds the wall value set
+        ! at the end of the previous stage, and the velocity is still zero with 'damped', since
+        ! `correc_ibm` does not correct the solid points
+        !
+        if(is_zero_vel) then
+          call apply_ibm_staircase(u,mask_u,dtrk)
+          call apply_ibm_staircase(v,mask_v,dtrk)
+          call apply_ibm_staircase(w,mask_w,dtrk)
+        end if
+        if(is_first_stage) then
+          do nscalibm=1,nscal
+            call apply_ibm_staircase_scalar(scalars(nscalibm)%val,&
+                mask_s,bcscal_ibm(nscalibm))
+          end do
+        end if
         call timer_toc('ibm_stage_start',nvtx_gpu_stream=-1)
       endif
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
+      !
+      ! boundary conditions: the halos are still up to date from the end of the previous stage,
+      ! unless the solid points were zeroed
+      !
+      if(is_zero_vel) then
+        call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
+      else
+        call bounduvw_norm(cbcvel,n,bcvel,is_bound,dl,dzc,dzf,u,v,w)
+      end if
+      is_first_stage = .false.
       !*******************!
-      !****//IBM-2nd\\****!
+      !****//IBM\\****!
       if(is_ibm)then
         call timer_tic('ibm_calc_a_b',nvtx_color='r',nvtx_gpu_stream=-1)
         call calc_a_b(lap_u,A_u,B_u,dtrk,visc,dl)
@@ -911,8 +931,6 @@ program cans
         end if
         if(is_ibm_force) call timer_toc('ibm_force',nvtx_gpu_stream=-1)
       end if
-      !*******************!
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
       !****//IBM\\****!
       if(is_ibm)then
         call timer_tic('ibm_staircase',nvtx_color='r',nvtx_gpu_stream=-1)
