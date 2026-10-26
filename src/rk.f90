@@ -18,7 +18,7 @@ module mod_rk
                        momx_d_z ,momy_d_z ,momz_d_z, &
                        mom_xyz_ad
   use mod_param, only: is_impdiff,is_impdiff_1d,is_boussinesq_buoyancy,is_fast_mom_kernels,is_ibm,const_scal, &
-                       adv_form,bulk_vel_def,ibm_ab_form
+                       adv_form,bulk_vel_def
   use mod_scal , only: scal,cmpt_scalflux,scalar
   use mod_utils, only: bulk_mean,bulk_mean_ibm
   use mod_types
@@ -770,11 +770,8 @@ module mod_rk
     real(rp),intent(in)                         :: dt_loop,visc
     real(rp)                                    :: ksi_l,e_l,dt_visc
     real(rp), parameter                         :: ksi_small = 1.e-3_rp, ksi_large = 50._rp
-    real(rp), parameter                         :: ksi_min = -0.616449196081417_rp ! minImbArg in AMPHIBIOUS
     integer                                     :: i,j,k,ib
-    logical                                     :: is_taylor
     dt_visc = dt_loop*visc
-    is_taylor = trim(ibm_ab_form) == 'taylor'
     ! A and B are computed at the band points only; elsewhere the laplacian is zero
     ! and A = B = 1, as set at initialisation
     !$acc parallel loop default(present) private(i,j,k,ksi_l,e_l) async(1)
@@ -783,13 +780,8 @@ module mod_rk
       i = idx(1,ib); j = idx(2,ib); k = idx(3,ib)
       ksi_l=lap_b(ib)*dt_visc
       ! B = ksi/(exp(ksi)-1): Taylor series for small ksi (avoids the cancellation
-      ! in exp(ksi)-1), exp(-ksi) form for large ksi (avoids the overflow);
-      ! `ibm_ab_form = 'taylor'`: B = 1/(1+ksi/2+ksi**2/6) for all ksi, as in AMPHIBIOUS
-      ! (with the same lower bound on ksi, never active for the laplacian >= 0 of `set_ibm_2nd`)
-      if(is_taylor)then
-        ksi_l=max(ksi_l,ksi_min)
-        B_id(i,j,k)=1._rp/((ksi_l/6._rp+0.5_rp)*ksi_l+1._rp)
-      elseif(ksi_l<ksi_small)then
+      ! in exp(ksi)-1), exp(-ksi) form for large ksi (avoids the overflow)
+      if(ksi_l<ksi_small)then
         B_id(i,j,k)=1._rp/(1._rp+ksi_l/2._rp+&
                           ksi_l**2/6._rp+ksi_l**3/24._rp)
       elseif(ksi_l<=ksi_large)then
