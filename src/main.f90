@@ -193,6 +193,8 @@ program cans
   real(rp),allocatable  :: lap_v(:,:,:)
   real(rp),allocatable  :: lap_w(:,:,:)
   real(rp),allocatable  :: lap_s(:,:,:)!(i,j,k)
+  integer ,allocatable, dimension(:,:) :: idx_u,idx_v,idx_w,idx_s ! band points, see `set_ibm_band`
+  real(rp),allocatable, dimension(:)   :: lapb_u,lapb_v,lapb_w,lapb_s
 
   real(rp),allocatable  :: A_u(:,:,:)
   real(rp),allocatable  :: A_v(:,:,:)
@@ -601,6 +603,12 @@ program cans
         ,n,l,dl,ibm_direction,amp_l,n_wave,l_0,phase_l,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,zc,zf,dzc,dzf,use_hmap,band_w)
     call set_ibm_2nd(lo,mask_s,lap_s,0,0,0,n,l,dl,ibm_direction,amp_l,n_wave,l_0,phase_l,&
                             hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,zc,zf,dzc,dzf,use_hmap,band_s)
+    call set_ibm_band(lap_u,idx_u,lapb_u)
+    call set_ibm_band(lap_v,idx_v,lapb_v)
+    call set_ibm_band(lap_w,idx_w,lapb_w)
+    call set_ibm_band(lap_s,idx_s,lapb_s)
+    deallocate(lap_u,lap_v,lap_w,lap_s)
+    !$acc enter data copyin(idx_u,idx_v,idx_w,idx_s,lapb_u,lapb_v,lapb_w,lapb_s)
   endif
   if(is_ibm)then
     allocate(fri_u(count(band_u(1:n(1),1:n(2),1:n(3))),12))! we do this way so we exlude ghost cells and only focus on the inner cells
@@ -650,7 +658,6 @@ program cans
     end if
     !
 #if defined (_OPENACC)
-    !$acc enter data copyin(lap_u,lap_v,lap_w,lap_s)
     !$acc enter data copyin(fri_u,fri_v,fri_w,p_grad)
     !$acc enter data copyin(band_s,band_u)
 #endif
@@ -820,9 +827,9 @@ program cans
       !****//IBM\\****!
       if(is_ibm)then
         call timer_tic('ibm_calc_a_b',nvtx_color='r',nvtx_gpu_stream=-1)
-        call calc_a_b(lap_u,A_u,B_u,dtrk,visc,dl)
-        call calc_a_b(lap_v,A_v,B_v,dtrk,visc,dl)
-        call calc_a_b(lap_w,A_w,B_w,dtrk,visc,dl)
+        call calc_a_b(idx_u,lapb_u,A_u,B_u,dtrk,visc)
+        call calc_a_b(idx_v,lapb_v,A_v,B_v,dtrk,visc)
+        call calc_a_b(idx_w,lapb_w,A_w,B_w,dtrk,visc)
         call timer_toc('ibm_calc_a_b',nvtx_gpu_stream=-1)
       endif
       if(is_ibm_force) call timer_tic('ibm_force',nvtx_color='m',nvtx_gpu_stream=-1)
@@ -842,7 +849,7 @@ program cans
         s => scalars(iscal)
         if(is_ibm) then
           call timer_tic('ibm_calc_a_b',nvtx_color='r',nvtx_gpu_stream=-1)
-          call calc_a_b(lap_s,A_s,B_s,dtrk,s%alpha,dl) ! A_s, B_s depend on the diffusivity
+          call calc_a_b(idx_s,lapb_s,A_s,B_s,dtrk,s%alpha) ! A_s, B_s depend on the diffusivity
           call timer_toc('ibm_calc_a_b',nvtx_gpu_stream=-1)
         end if
         call rk_scal(rkcoeff(:,irk),n,dli,l,dzci,dzfi,grid_vol_ratio_f,s%alpha,dt,is_bound,u,v,w, &

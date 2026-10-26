@@ -761,49 +761,45 @@ module mod_rk
   end subroutine cmpt_bulk_forcing_alternative
 
 !********//IBM\\*********!
-  subroutine calc_a_b(laplacian_id,A_id,B_id,dt_loop,visc,dl)
+  subroutine calc_a_b(idx,lap_b,A_id,B_id,dt_loop,visc)
     implicit none
-    real(rp),intent(in),dimension(0:,0:,0:)  :: laplacian_id
+    integer ,intent(in),dimension(:,:)          :: idx   ! band points (`set_ibm_band`)
+    real(rp),intent(in),dimension(:)            :: lap_b ! their laplacian
     real(rp),intent(inout),dimension(0:,0:,0:)  :: A_id
     real(rp),intent(inout),dimension(0:,0:,0:)  :: B_id
     real(rp),intent(in)                         :: dt_loop,visc
-    real(rp), intent(in),dimension(3)           :: dl
     real(rp)                                    :: ksi_l,e_l,dt_visc
     real(rp), parameter                         :: ksi_small = 1.e-3_rp, ksi_large = 50._rp
     real(rp), parameter                         :: ksi_min = -0.616449196081417_rp ! minImbArg in AMPHIBIOUS
-    integer                                     :: i,j,k
+    integer                                     :: i,j,k,ib
     logical                                     :: is_taylor
     dt_visc = dt_loop*visc
     is_taylor = trim(ibm_ab_form) == 'taylor'
-    !$acc parallel loop collapse(3) default(present) private(ksi_l,e_l) async(1)
-    !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared) PRIVATE(ksi_l,e_l)
-    do k=lbound(laplacian_id,3),ubound(laplacian_id,3)
-      do j=lbound(laplacian_id,2),ubound(laplacian_id,2)
-        do i=lbound(laplacian_id,1),ubound(laplacian_id,1)
-          ! away from the wall the laplacian is zero and A = B = 1, as set at initialisation
-          if(laplacian_id(i,j,k) /= 0._rp)then
-            ksi_l=laplacian_id(i,j,k)*dt_visc
-            ! B = ksi/(exp(ksi)-1): Taylor series for small ksi (avoids the cancellation
-            ! in exp(ksi)-1), exp(-ksi) form for large ksi (avoids the overflow);
-            ! `ibm_ab_form = 'taylor'`: B = 1/(1+ksi/2+ksi**2/6) for all ksi, as in AMPHIBIOUS
-            ! (with the same lower bound on ksi, never active for the laplacian >= 0 of `set_ibm_2nd`)
-            if(is_taylor)then
-              ksi_l=max(ksi_l,ksi_min)
-              B_id(i,j,k)=1._rp/((ksi_l/6._rp+0.5_rp)*ksi_l+1._rp)
-            elseif(ksi_l<ksi_small)then
-              B_id(i,j,k)=1._rp/(1._rp+ksi_l/2._rp+&
-                                ksi_l**2/6._rp+ksi_l**3/24._rp)
-            elseif(ksi_l<=ksi_large)then
-              e_l=exp(ksi_l)-1._rp
-              B_id(i,j,k)=ksi_l/e_l
-            else
-              e_l=exp(-ksi_l)
-              B_id(i,j,k)=ksi_l*e_l/(1._rp-e_l)
-            endif
-            A_id(i,j,k)=ksi_l+B_id(i,j,k)
-          endif
-        end do
-      end do
+    ! A and B are computed at the band points only; elsewhere the laplacian is zero
+    ! and A = B = 1, as set at initialisation
+    !$acc parallel loop default(present) private(i,j,k,ksi_l,e_l) async(1)
+    !$OMP PARALLEL DO   DEFAULT(shared) PRIVATE(i,j,k,ksi_l,e_l)
+    do ib=1,size(lap_b)
+      i = idx(1,ib); j = idx(2,ib); k = idx(3,ib)
+      ksi_l=lap_b(ib)*dt_visc
+      ! B = ksi/(exp(ksi)-1): Taylor series for small ksi (avoids the cancellation
+      ! in exp(ksi)-1), exp(-ksi) form for large ksi (avoids the overflow);
+      ! `ibm_ab_form = 'taylor'`: B = 1/(1+ksi/2+ksi**2/6) for all ksi, as in AMPHIBIOUS
+      ! (with the same lower bound on ksi, never active for the laplacian >= 0 of `set_ibm_2nd`)
+      if(is_taylor)then
+        ksi_l=max(ksi_l,ksi_min)
+        B_id(i,j,k)=1._rp/((ksi_l/6._rp+0.5_rp)*ksi_l+1._rp)
+      elseif(ksi_l<ksi_small)then
+        B_id(i,j,k)=1._rp/(1._rp+ksi_l/2._rp+&
+                          ksi_l**2/6._rp+ksi_l**3/24._rp)
+      elseif(ksi_l<=ksi_large)then
+        e_l=exp(ksi_l)-1._rp
+        B_id(i,j,k)=ksi_l/e_l
+      else
+        e_l=exp(-ksi_l)
+        B_id(i,j,k)=ksi_l*e_l/(1._rp-e_l)
+      endif
+      A_id(i,j,k)=ksi_l+B_id(i,j,k)
     end do
   end subroutine calc_a_b
 !************************!
