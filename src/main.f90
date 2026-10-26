@@ -857,7 +857,7 @@ program cans
         if(is_impdiff) then
           if(is_ibm .and. is_impdiff_1d) then
             call solve_helmholtz_ibm(n,-0.5*s%alpha*dtrk,s%a,s%b,s%c,s%rhsb%x,s%rhsb%y,s%rhsb%z,is_bound, &
-                                     s%cbc,['c','c','c'],mask_s,A_s,bcscal_ibm(iscal),s%val)
+                                     s%cbc,['c','c','c'],mask_s,A_s,bcscal_ibm(iscal),.false.,s%val)
           else
             call solve_helmholtz(n,ng,hi,s%arrplan,s%normfft,-0.5*s%alpha*dtrk, &
                                  s%lambdaxy,s%a,s%b,s%c,s%rhsb%x,s%rhsb%y,s%rhsb%z,is_bound,s%cbc,['c','c','c'],s%val)
@@ -905,11 +905,11 @@ program cans
         alpha = -.5*visc*dtrk
         if(is_ibm .and. is_impdiff_1d) then
           call solve_helmholtz_ibm(n,alpha,au,bu,cu,rhsbu%x,rhsbu%y,rhsbu%z,is_bound,cbcvel(:,:,1),['f','c','c'], &
-                                   mask_u,A_u,0._rp,u)
+                                   mask_u,A_u,0._rp,.not.is_ibm_force,u)
           call solve_helmholtz_ibm(n,alpha,av,bv,cv,rhsbv%x,rhsbv%y,rhsbv%z,is_bound,cbcvel(:,:,2),['c','f','c'], &
-                                   mask_v,A_v,0._rp,v)
+                                   mask_v,A_v,0._rp,.not.is_ibm_force,v)
           call solve_helmholtz_ibm(n,alpha,aw,bw,cw,rhsbw%x,rhsbw%y,rhsbw%z,is_bound,cbcvel(:,:,3),['c','c','f'], &
-                                   mask_w,A_w,0._rp,w)
+                                   mask_w,A_w,0._rp,.not.is_ibm_force,w)
         else
           call solve_helmholtz(n,ng,hi,arrplanu,normfftu,alpha, &
                                lambdaxyu,au,bu,cu,rhsbu%x,rhsbu%y,rhsbu%z,is_bound,cbcvel(:,:,1),['f','c','c'],u)
@@ -934,9 +934,11 @@ program cans
       !****//IBM\\****!
       if(is_ibm)then
         call timer_tic('ibm_staircase',nvtx_color='r',nvtx_gpu_stream=-1)
-        call apply_ibm_staircase(u,mask_u,dtrk)
-        call apply_ibm_staircase(v,mask_v,dtrk)
-        call apply_ibm_staircase(w,mask_w,dtrk)
+        if(is_ibm_force .or. .not.is_impdiff) then ! else done in `solve_helmholtz_ibm`
+          call apply_ibm_staircase(u,mask_u,dtrk)
+          call apply_ibm_staircase(v,mask_v,dtrk)
+          call apply_ibm_staircase(w,mask_w,dtrk)
+        end if
         do nscalibm=1,nscal
           call apply_ibm_staircase_scalar(scalars(nscalibm)%val,&
               mask_s,bcscal_ibm(nscalibm))

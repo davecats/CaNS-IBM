@@ -74,7 +74,7 @@ module mod_solve_helmholtz
     end if
   end subroutine solve_helmholtz
   !
-  subroutine solve_helmholtz_ibm(n,alpha,a,b,c,rhsbx,rhsby,rhsbz,is_bound,cbc,c_or_f,mask,am,sw,p)
+  subroutine solve_helmholtz_ibm(n,alpha,a,b,c,rhsbx,rhsby,rhsbz,is_bound,cbc,c_or_f,mask,am,sw,is_set_solid,p)
     !
     ! z-implicit (1D) Helmholtz solve with the immersed boundary inside the operator;
     ! each z column is solved directly (Thomas algorithm) with a point-dependent diagonal:
@@ -86,7 +86,8 @@ module mod_solve_helmholtz
     !     to O(1/ibm_pen), so the band points see the staircase wall, as in the explicit operator;
     !     ibm_pen*(p - sw) is the wall impulse of the solid point (see `ibm_impulse`)
     ! the right-hand side, am*p (ibm_pen*sw at the solid points) plus the boundary terms of
-    ! `updt_rhs_b`, is formed in the forward sweep
+    ! `updt_rhs_b`, is formed in the forward sweep; with is_set_solid the solid points are set
+    ! to sw in the back substitution, as `apply_ibm_staircase` does
     ! requires z columns local to each task (n(3) = ng(3)) and a non-periodic z direction
     !
     integer ,    intent(in   ), dimension(3)                :: n
@@ -99,9 +100,10 @@ module mod_solve_helmholtz
     logical ,    intent(in   ), dimension(0:,0:,0:)         :: mask
     real(rp),    intent(in   ), dimension(0:,0:,0:)         :: am
     real(rp),    intent(in   )                              :: sw
+    logical ,    intent(in   )                              :: is_set_solid
     real(rp),    intent(inout), dimension(0:,0:,0:)         :: p
     real(rp), allocatable, dimension(:,:,:), save :: d
-    real(rp) :: alphai,dk,z,rhs,dm,pm
+    real(rp) :: alphai,dk,z,rhs,dm,pm,pk
     integer  :: i,j,k,nn,nx,ny
     logical  :: is_bx0,is_bx1,is_by0,is_by1,is_bz0,is_bz1
     !
@@ -121,8 +123,8 @@ module mod_solve_helmholtz
     is_by0 = present(rhsby) .and. is_bound(0,2); is_by1 = present(rhsby) .and. is_bound(1,2)
     is_bz0 = present(rhsbz) .and. is_bound(0,3); is_bz1 = present(rhsbz) .and. is_bound(1,3)
     !
-    !$acc parallel loop gang vector collapse(2) default(present) private(dk,z,rhs,dm,pm) async(1)
-    !$OMP PARALLEL DO   COLLAPSE(2) DEFAULT(shared)  PRIVATE(dk,z,rhs,dm,pm,k)
+    !$acc parallel loop gang vector collapse(2) default(present) private(dk,z,rhs,dm,pm,pk) async(1)
+    !$OMP PARALLEL DO   COLLAPSE(2) DEFAULT(shared)  PRIVATE(dk,z,rhs,dm,pm,pk,k)
     do j=1,n(2)
       do i=1,n(1)
         dm = 0.
@@ -149,11 +151,16 @@ module mod_solve_helmholtz
             p(i,j,k) = pm
           else
             p(i,j,k) = rhs ! boundary face, not solved
+            if(is_set_solid .and. mask(i,j,k)) p(i,j,k) = sw
           end if
         end do
+        pk = p(i,j,nn)
+        if(is_set_solid .and. mask(i,j,nn)) p(i,j,nn) = sw
         !$acc loop seq
         do k=nn-1,1,-1
-          p(i,j,k) = p(i,j,k) - d(i,j,k)*p(i,j,k+1)
+          pk = p(i,j,k) - d(i,j,k)*pk
+          p(i,j,k) = pk
+          if(is_set_solid .and. mask(i,j,k)) p(i,j,k) = sw
         end do
       end do
     end do
