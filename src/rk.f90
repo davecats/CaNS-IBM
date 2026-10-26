@@ -17,7 +17,7 @@ module mod_rk
                        momx_d_xy,momy_d_xy,momz_d_xy, &
                        momx_d_z ,momy_d_z ,momz_d_z, &
                        mom_xyz_ad
-  use mod_param, only: is_impdiff,is_impdiff_1d,is_boussinesq_buoyancy,is_fast_mom_kernels,ibm_2nd,is_ibm,const_scal, &
+  use mod_param, only: is_impdiff,is_impdiff_1d,is_boussinesq_buoyancy,is_fast_mom_kernels,is_ibm,const_scal, &
                        adv_form,bulk_vel_def
   use mod_scal , only: scal,cmpt_scalflux,scalar
   use mod_utils, only: bulk_mean,bulk_mean_ibm
@@ -178,7 +178,7 @@ module mod_rk
     do k=1,n(3)
       do j=1,n(2)
         do i=1,n(1)
-          if(.not.ibm_2nd)then
+          if(.not.is_ibm)then
           u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
                                 factor12*(bforce(1) - dli(1)*( p(i+1,j,k)-p(i,j,k)))
           else
@@ -186,14 +186,14 @@ module mod_rk
                                 factor12*(bforce(1) - dli(1)*( p(i+1,j,k)-p(i,j,k))))/A_u(i,j,k)
           endif                                
           if(is_buoyancy) then
-            if(ibm_2nd)then
+            if(is_ibm)then
               u(i,j,k) = u(i,j,k) - factor12*gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k))/A_u(i,j,k)
             else
               u(i,j,k) = u(i,j,k) - factor12*gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k))
             endif
           endif
           !
-          if(.not.ibm_2nd)then
+          if(.not.is_ibm)then
           v(i,j,k) = v(i,j,k) + factor1*dvdtrk(i,j,k) + factor2*dvdtrko(i,j,k) + &
                                 factor12*(bforce(2) - dli(2)*( p(i,j+1,k)-p(i,j,k)))
           else
@@ -201,14 +201,14 @@ module mod_rk
                                 factor12*(bforce(2) - dli(2)*( p(i,j+1,k)-p(i,j,k))))/A_v(i,j,k)                                            
           endif
           if(is_buoyancy) then
-            if(ibm_2nd)then
+            if(is_ibm)then
               v(i,j,k) = v(i,j,k) - factor12*gacc(2)*beta*0.5*(s(i,j+1,k)+s(i,j,k))/A_v(i,j,k)
             else
               v(i,j,k) = v(i,j,k) - factor12*gacc(2)*beta*0.5*(s(i,j+1,k)+s(i,j,k))
             endif
           endif
           !
-          if(.not.ibm_2nd)then
+          if(.not.is_ibm)then
           w(i,j,k) = w(i,j,k) + factor1*dwdtrk(i,j,k) + factor2*dwdtrko(i,j,k) + &
                                 factor12*(bforce(3) - dzci(k)*(p(i,j,k+1)-p(i,j,k)))
           else
@@ -216,7 +216,7 @@ module mod_rk
                                 factor12*(bforce(3) - dzci(k)*(p(i,j,k+1)-p(i,j,k))))/A_w(i,j,k)
           endif
           if(is_buoyancy) then
-            if(ibm_2nd)then
+            if(is_ibm)then
               w(i,j,k) = w(i,j,k) - factor12*gacc(3)*beta*0.5*(s(i,j,k+1)+s(i,j,k))/A_w(i,j,k)
             else
               w(i,j,k) = w(i,j,k) - factor12*gacc(3)*beta*0.5*(s(i,j,k+1)+s(i,j,k))
@@ -224,7 +224,7 @@ module mod_rk
           endif
           !
           if(is_impdiff) then
-            if(.not.ibm_2nd)then
+            if(.not.is_ibm)then
               u(i,j,k) = u(i,j,k) + factor12*dudtrkd(i,j,k)
               v(i,j,k) = v(i,j,k) + factor12*dvdtrkd(i,j,k)
               w(i,j,k) = w(i,j,k) + factor12*dwdtrkd(i,j,k)
@@ -244,7 +244,7 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            if(.not.ibm_2nd)then
+            if(.not.is_ibm)then
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
                                   factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)))
             v(i,j,k) = v(i,j,k) + factor1*dvdtrk(i,j,k) + factor2*dvdtrko(i,j,k) + &
@@ -268,7 +268,7 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            if(.not.ibm_2nd)then
+            if(.not.is_ibm)then
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
                                   factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)) + &
                                             dudtrkd(i,j,k))
@@ -298,7 +298,7 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            if(.not.ibm_2nd)then
+            if(.not.is_ibm)then
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
                                   factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)) &
                                           - gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k)))
@@ -328,7 +328,7 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            if(.not. ibm_2nd)then
+            if(.not.is_ibm)then
             u(i,j,k) = u(i,j,k) + factor1*dudtrk(i,j,k) + factor2*dudtrko(i,j,k) + &
                                   factor12*(bforce(1) - dli(1)*(p(i+1,j,k)-p(i,j,k)) &
                                           - gacc(1)*beta*0.5*(s(i+1,j,k)+s(i,j,k)) + &
@@ -415,9 +415,9 @@ module mod_rk
     if(is_impdiff) then
       !
       ! compute rhs of Helmholtz equation
-      ! (with ibm_2nd: rhs/A, as `solve_helmholtz_ibm` multiplies it by A)
+      ! (with the IBM: rhs/A, as `solve_helmholtz_ibm` multiplies it by A)
       !
-      if(.not.ibm_2nd) then
+      if(.not.is_ibm) then
         !$acc parallel loop collapse(3) default(present) async(1)
         !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared)
         do k=1,n(3)
@@ -611,7 +611,7 @@ module mod_rk
       do k=1,n(3)
         do j=1,n(2)
           do i=1,n(1)
-            s(i,j,k) = s(i,j,k) - .5_rp*factor12*dsdtrkd(i,j,k)/A_s(i,j,k) ! rhs/A (A = 1 without ibm_2nd)
+            s(i,j,k) = s(i,j,k) - .5_rp*factor12*dsdtrkd(i,j,k)/A_s(i,j,k) ! rhs/A (A = 1 without the IBM)
           end do
         end do
       end do
@@ -761,38 +761,37 @@ module mod_rk
   end subroutine cmpt_bulk_forcing_alternative
 
 !********//IBM\\*********!
-  subroutine calc_a_b(laplacian_id,A_id,B_id,dt_loop,visc,dl)
+  subroutine calc_a_b(idx,lap_b,A_id,B_id,dt_loop,visc)
     implicit none
-    real(rp),intent(in),dimension(0:,0:,0:)  :: laplacian_id
+    integer ,intent(in),dimension(:,:)          :: idx   ! band points (`set_ibm_band`)
+    real(rp),intent(in),dimension(:)            :: lap_b ! their laplacian
     real(rp),intent(inout),dimension(0:,0:,0:)  :: A_id
     real(rp),intent(inout),dimension(0:,0:,0:)  :: B_id
     real(rp),intent(in)                         :: dt_loop,visc
-    real(rp), intent(in),dimension(3)           :: dl
     real(rp)                                    :: ksi_l,e_l,dt_visc
     real(rp), parameter                         :: ksi_small = 1.e-3_rp, ksi_large = 50._rp
-    integer                                     :: i,j,k
+    integer                                     :: i,j,k,ib
     dt_visc = dt_loop*visc
-    !$acc parallel loop collapse(3) default(present) private(ksi_l,e_l) async(1)
-    !$OMP PARALLEL DO   COLLAPSE(3) DEFAULT(shared) PRIVATE(ksi_l,e_l)
-    do k=lbound(laplacian_id,3),ubound(laplacian_id,3)
-      do j=lbound(laplacian_id,2),ubound(laplacian_id,2)
-        do i=lbound(laplacian_id,1),ubound(laplacian_id,1)
-          ksi_l=laplacian_id(i,j,k)*dt_visc
-          ! B = ksi/(exp(ksi)-1): Taylor series for small ksi (avoids the cancellation
-          ! in exp(ksi)-1), exp(-ksi) form for large ksi (avoids the overflow)
-          if(ksi_l<ksi_small)then
-            B_id(i,j,k)=1._rp/(1._rp+ksi_l/2._rp+&
-                              ksi_l**2/6._rp+ksi_l**3/24._rp)
-          elseif(ksi_l<=ksi_large)then
-            e_l=exp(ksi_l)-1._rp
-            B_id(i,j,k)=ksi_l/e_l
-          else
-            e_l=exp(-ksi_l)
-            B_id(i,j,k)=ksi_l*e_l/(1._rp-e_l)
-          endif
-          A_id(i,j,k)=ksi_l+B_id(i,j,k)
-        end do
-      end do
+    ! A and B are computed at the band points only; elsewhere the laplacian is zero
+    ! and A = B = 1, as set at initialisation
+    !$acc parallel loop default(present) private(i,j,k,ksi_l,e_l) async(1)
+    !$OMP PARALLEL DO   DEFAULT(shared) PRIVATE(i,j,k,ksi_l,e_l)
+    do ib=1,size(lap_b)
+      i = idx(1,ib); j = idx(2,ib); k = idx(3,ib)
+      ksi_l=lap_b(ib)*dt_visc
+      ! B = ksi/(exp(ksi)-1): Taylor series for small ksi (avoids the cancellation
+      ! in exp(ksi)-1), exp(-ksi) form for large ksi (avoids the overflow)
+      if(ksi_l<ksi_small)then
+        B_id(i,j,k)=1._rp/(1._rp+ksi_l/2._rp+&
+                          ksi_l**2/6._rp+ksi_l**3/24._rp)
+      elseif(ksi_l<=ksi_large)then
+        e_l=exp(ksi_l)-1._rp
+        B_id(i,j,k)=ksi_l/e_l
+      else
+        e_l=exp(-ksi_l)
+        B_id(i,j,k)=ksi_l*e_l/(1._rp-e_l)
+      endif
+      A_id(i,j,k)=ksi_l+B_id(i,j,k)
     end do
   end subroutine calc_a_b
 !************************!

@@ -19,7 +19,7 @@ module mod_sanity
   use mod_initmpi   , only: initmpi
   use mod_initsolver, only: initsolver
   use mod_param     , only: ipencil_axis,is_impdiff,is_impdiff_1d,is_poisson_pcr_tdma,small,adv_form, &
-                            is_ibm,ibm_2nd,nscal,cbcscal_ibm,bulk_vel_def, &
+                            is_ibm,nscal,cbcscal_ibm,bulk_vel_def, &
                             ibm_shape,use_hmap,ibm_direction,amp_l,phase_l,ibm_proj
 #if !defined(_OPENACC)
   use mod_solver    , only: solver
@@ -65,13 +65,9 @@ module mod_sanity
     if(.not.any(trim(adv_form) == ['vv ','div'])) then
       if(myid == 0)  print*, 'ERROR: `adv_form` must be either `vv` or `div`.'; call abortit
     end if
-    if(ibm_2nd .and. is_impdiff .and. .not.is_impdiff_1d) then
-      if(myid == 0)  print*, 'ERROR: `ibm_2nd = T` with implicit diffusion requires `is_impdiff_1d = T` &
-                             &(the 3D FFT-based Helmholtz solver cannot hold the IB term).'; call abortit
-    end if
     if(is_ibm .and. is_impdiff .and. .not.is_impdiff_1d) then
-      if(myid == 0)  print*, 'Warning: with `is_impdiff = T`, `is_impdiff_1d = F` the implicit Helmholtz solve &
-                             &does not see the IBM staircase.'
+      if(myid == 0)  print*, 'ERROR: `is_ibm = T` with implicit diffusion requires `is_impdiff_1d = T` &
+                             &(the 3D FFT-based Helmholtz solver cannot hold the IB term).'; call abortit
     end if
     if(.not.any(trim(ibm_shape) == ['macdonald','sinusoid '])) then
       if(myid == 0)  print*, 'ERROR: `ibm_shape` must be either `macdonald` or `sinusoid`.'; call abortit

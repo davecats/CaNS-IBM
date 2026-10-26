@@ -219,7 +219,7 @@ module mod_ibm
 
     end subroutine get_hmap_loc
 
-    ! 1st order IBM 
+    ! staircase masks: .true. at the solid points
     ! we change the diL depending the velocity mask we are handling 
     ! e.g. we need to apply 1,0,0 for mask_u and we need to apply 0,1,0 for mask_v 
     ! 0,0,1 for mask_w
@@ -271,6 +271,31 @@ module mod_ibm
             end do 
         end do
     end subroutine set_ibm_staircase
+    subroutine set_ibm_band(laplacian_id,idx,lap_b)
+        !
+        ! compact list of the points with a nonzero laplacian (the band points next to the wall):
+        ! indices idx(1:3,:) and laplacian lap_b(:), where `calc_a_b` computes A and B
+        ! (A = B = 1 elsewhere)
+        !
+        implicit none
+        real(rp),intent(in),dimension(0:,0:,0:)         :: laplacian_id
+        integer ,intent(out),allocatable,dimension(:,:) :: idx
+        real(rp),intent(out),allocatable,dimension(:)   :: lap_b
+        integer :: i,j,k,ib
+        allocate(idx(3,count(laplacian_id /= 0._rp)),lap_b(count(laplacian_id /= 0._rp)))
+        ib = 0
+        do k=lbound(laplacian_id,3),ubound(laplacian_id,3)
+            do j=lbound(laplacian_id,2),ubound(laplacian_id,2)
+                do i=lbound(laplacian_id,1),ubound(laplacian_id,1)
+                    if(laplacian_id(i,j,k) /= 0._rp) then
+                        ib = ib+1
+                        idx(:,ib) = [i,j,k]
+                        lap_b(ib) = laplacian_id(i,j,k)
+                    end if
+                end do
+            end do
+        end do
+    end subroutine set_ibm_band
     !2nd order scheme--laplacian settings
     subroutine set_ibm_2nd(lo,mask_id,laplacian_id,dix,diy,diz&
         ,n,l,dl,ibm_direction,amp_l,n_wave,l_0,phase_l,hmap,l1_hmap,l2_hmap,n1_hmap,n2_hmap,&

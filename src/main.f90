@@ -30,7 +30,7 @@ program cans
   use, intrinsic :: ieee_arithmetic, only: is_nan => ieee_is_nan
   use mpi
   use decomp_2d
-  use mod_bound          , only: boundp,bounduvw,updt_rhs_b
+  use mod_bound          , only: boundp,bounduvw,bounduvw_norm,updt_rhs_b
   use mod_chkdiv         , only: chkdiv
   use mod_chkdt          , only: chkdt
   use mod_common_mpi     , only: myid,ierr,dinfo_ptdma
@@ -44,6 +44,7 @@ program cans
   use mod_load           , only: load_one
   use mod_mom            , only: bulk_forcing
   use mod_rk             , only: rk,rk_scal,calc_a_b
+  use mod_timer          , only: timer_tic,timer_toc
   use mod_output         , only: out0d,gen_alias,out1d,out1d_chan,out1d_chan_ibm,out2d,out3d, &
                                  write_log_output,write_visu_2d,write_visu_3d
   use mod_param          , only: ng,l,dl,dli, &
@@ -73,7 +74,6 @@ program cans
                                  is_poisson_pcr_tdma,      &
                                  is_mask_divergence_check, &
                                  is_ibm,           &
-                                 ibm_2nd,          &
                                  do_richardson,    &
                                  ibm_direction,    &
                                  l_0,              &
@@ -140,7 +140,7 @@ program cans
   !
   real(rp) :: dt,dti,dt_cfl,time,dtrk,dtrki,divtot,divmax
   real(rp) :: velmax_solid(3),divtot_m,divmax_m,ubulk_fl
-  logical  :: is_ibm_force,is_ibm_map
+  logical  :: is_ibm_force,is_ibm_map,is_first_stage,is_zero_vel
   integer  :: iout_wall = 0 ! interval of the per-point IB wall outputs
   character(len=6) :: impart
   real(rp), allocatable, dimension(:,:,:) :: imp_map ! column-integrated IB force (x,y) of the lower wall
@@ -193,6 +193,8 @@ program cans
   real(rp),allocatable  :: lap_v(:,:,:)
   real(rp),allocatable  :: lap_w(:,:,:)
   real(rp),allocatable  :: lap_s(:,:,:)!(i,j,k)
+  integer ,allocatable, dimension(:,:) :: idx_u,idx_v,idx_w,idx_s ! band points, see `set_ibm_band`
+  real(rp),allocatable, dimension(:)   :: lapb_u,lapb_v,lapb_w,lapb_s
 
   real(rp),allocatable  :: A_u(:,:,:)
   real(rp),allocatable  :: A_v(:,:,:)
@@ -576,7 +578,7 @@ program cans
   
   if(is_ibm)then
     ! we fill the ibm masks here
-    print*, "***1stOrder IBM coefficients are deploying***"
+    print*, "***IBM masks are deploying***"
     call set_ibm_staircase(lo,mask_u,1,0,0,n,l,dl,&
     ibm_direction,amp_l,n_wave,l_0,phase_l,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,zc,zf)
     call set_ibm_staircase(lo,mask_v,0,1,0,n,l,dl,&
@@ -592,7 +594,7 @@ program cans
     !$acc enter data create(imp_map)
   endif
   if(is_ibm)then
-    print*, "***2nd Order IBM coefficients are deploying***"
+    print*, "***IBM coefficients are deploying***"
     call set_ibm_2nd(lo,mask_u,lap_u,1,0,0&
         ,n,l,dl,ibm_direction,amp_l,n_wave,l_0,phase_l,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,zc,zf,dzc,dzf,use_hmap,band_u)
     call set_ibm_2nd(lo,mask_v,lap_v,0,1,0&
@@ -601,6 +603,12 @@ program cans
         ,n,l,dl,ibm_direction,amp_l,n_wave,l_0,phase_l,hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,zc,zf,dzc,dzf,use_hmap,band_w)
     call set_ibm_2nd(lo,mask_s,lap_s,0,0,0,n,l,dl,ibm_direction,amp_l,n_wave,l_0,phase_l,&
                             hmap_tha,lx_tha,ly_tha,nx_hmap_tha,ny_hmap_tha,zc,zf,dzc,dzf,use_hmap,band_s)
+    call set_ibm_band(lap_u,idx_u,lapb_u)
+    call set_ibm_band(lap_v,idx_v,lapb_v)
+    call set_ibm_band(lap_w,idx_w,lapb_w)
+    call set_ibm_band(lap_s,idx_s,lapb_s)
+    deallocate(lap_u,lap_v,lap_w,lap_s)
+    !$acc enter data copyin(idx_u,idx_v,idx_w,idx_s,lapb_u,lapb_v,lapb_w,lapb_s)
   endif
   if(is_ibm)then
     allocate(fri_u(count(band_u(1:n(1),1:n(2),1:n(3))),12))! we do this way so we exlude ghost cells and only focus on the inner cells
@@ -650,15 +658,10 @@ program cans
     end if
     !
 #if defined (_OPENACC)
-    !$acc enter data copyin(lap_u,lap_v,lap_w,lap_s)
     !$acc enter data copyin(fri_u,fri_v,fri_w,p_grad)
     !$acc enter data copyin(band_s,band_u)
 #endif
     write(mpiranknum,'(i7.7)') myid !for naming the rank based output
-  endif
-  if(ibm_2nd .and. .not.is_ibm)then
-    if(myid == 0) print*, "ERROR: ibm_2nd requires is_ibm = T"
-    error stop
   endif
   if(is_ibm .and. is_impdiff_1d)then
     ! the IB-aware z-implicit solve (`solve_helmholtz_ibm`) needs whole z columns on each task
@@ -746,6 +749,7 @@ program cans
   !
   if(myid == 0) print*, '*** Calculation loop starts now ***'
   is_done = .false.
+  is_first_stage = .true.
   do while(.not.is_done)
     if(is_timing) then
       !$acc wait(1)
@@ -760,6 +764,7 @@ program cans
     is_ibm_map   = is_ibm.and.iout_wall > 0.and.mod(istep,max(iout_wall,1)) == 0
     is_ibm_force = is_ibm.and.iout0d > 0.and.mod(istep,max(iout0d,1)) == 0
     is_ibm_force = is_ibm_force.or.is_ibm_map
+    call timer_tic(trim(merge('step_ibm_out','step        ',is_ibm_force)),nvtx_color='g',nvtx_gpu_stream=-1)
     if(is_ibm_force) then
       imp_ibm(:,:,:)  = 0.
       imp_leak(:,:,:) = 0.
@@ -770,7 +775,9 @@ program cans
       dtrk = sum(rkcoeff(:,irk))*dt
       dtrki = dtrk**(-1)
       !****//IBM\\****!
+      is_zero_vel = is_ibm .and. (is_first_stage .or. trim(ibm_proj) == 'none')
       if(is_ibm)then
+        call timer_tic('ibm_stage_start',nvtx_color='r',nvtx_gpu_stream=-1)
         if(is_ibm_force) then ! velocity the projection left in the solid
           call ibm_impulse('leak',n,lo,ng,grid_vol_ratio_f,mask_u,A_u,B_u,0._rp,u,imp_leak(:,:,1),imp_map(:,:,1))
           call ibm_impulse('leak',n,lo,ng,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,v,imp_leak(:,:,2),imp_map(:,:,2))
@@ -788,22 +795,44 @@ program cans
           call wf_scatter('leak',2,dli,dzci,grid_vol_ratio_f,mask_v,A_v,B_v,fac_wf,0._rp,pp,v)
           call wf_scatter('leak',3,dli,dzci,grid_vol_ratio_c,mask_w,A_w,B_w,fac_wf,0._rp,pp,w)
         end if
-        call apply_ibm_staircase(u,mask_u,dtrk)
-        call apply_ibm_staircase(v,mask_v,dtrk)
-        call apply_ibm_staircase(w,mask_w,dtrk)
-        do nscalibm=1,nscal
-          call apply_ibm_staircase_scalar(scalars(nscalibm)%val,&
-              mask_s,bcscal_ibm(nscalibm))
-        end do 
+        !
+        ! zero the solid points; after the first stage the scalar still holds the wall value set
+        ! at the end of the previous stage, and the velocity is still zero with 'damped', since
+        ! `correc_ibm` does not correct the solid points
+        !
+        if(is_zero_vel) then
+          call apply_ibm_staircase(u,mask_u,dtrk)
+          call apply_ibm_staircase(v,mask_v,dtrk)
+          call apply_ibm_staircase(w,mask_w,dtrk)
+        end if
+        if(is_first_stage) then
+          do nscalibm=1,nscal
+            call apply_ibm_staircase_scalar(scalars(nscalibm)%val,&
+                mask_s,bcscal_ibm(nscalibm))
+          end do
+        end if
+        call timer_toc('ibm_stage_start',nvtx_gpu_stream=-1)
       endif
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
+      !
+      ! boundary conditions: the halos are still up to date from the end of the previous stage,
+      ! unless the solid points were zeroed
+      !
+      if(is_zero_vel) then
+        call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
+      else
+        call bounduvw_norm(cbcvel,n,bcvel,is_bound,dl,dzc,dzf,u,v,w)
+      end if
+      is_first_stage = .false.
       !*******************!
-      !****//IBM-2nd\\****!
-      if(ibm_2nd)then
-        call calc_a_b(lap_u,A_u,B_u,dtrk,visc,dl)
-        call calc_a_b(lap_v,A_v,B_v,dtrk,visc,dl)
-        call calc_a_b(lap_w,A_w,B_w,dtrk,visc,dl)
+      !****//IBM\\****!
+      if(is_ibm)then
+        call timer_tic('ibm_calc_a_b',nvtx_color='r',nvtx_gpu_stream=-1)
+        call calc_a_b(idx_u,lapb_u,A_u,B_u,dtrk,visc)
+        call calc_a_b(idx_v,lapb_v,A_v,B_v,dtrk,visc)
+        call calc_a_b(idx_w,lapb_w,A_w,B_w,dtrk,visc)
+        call timer_toc('ibm_calc_a_b',nvtx_gpu_stream=-1)
       endif
+      if(is_ibm_force) call timer_tic('ibm_force',nvtx_color='m',nvtx_gpu_stream=-1)
       if(is_ibm_force) then
         call ibm_impulse('pre',n,lo,ng,grid_vol_ratio_f,mask_u,A_u,B_u,0._rp,u,imp_ibm(:,:,1),imp_map(:,:,1))
         call ibm_impulse('pre',n,lo,ng,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,v,imp_ibm(:,:,2),imp_map(:,:,2))
@@ -814,10 +843,15 @@ program cans
         call wf_scatter('pre',2,dli,dzci,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,0._rp,p,v)
         call wf_scatter('pre',3,dli,dzci,grid_vol_ratio_c,mask_w,A_w,B_w,0._rp,0._rp,p,w)
       end if
+      if(is_ibm_force) call timer_toc('ibm_force',nvtx_gpu_stream=-1)
       !*******************!
       do iscal=1,nscal
         s => scalars(iscal)
-        if(ibm_2nd) call calc_a_b(lap_s,A_s,B_s,dtrk,s%alpha,dl) ! A_s, B_s depend on the diffusivity
+        if(is_ibm) then
+          call timer_tic('ibm_calc_a_b',nvtx_color='r',nvtx_gpu_stream=-1)
+          call calc_a_b(idx_s,lapb_s,A_s,B_s,dtrk,s%alpha) ! A_s, B_s depend on the diffusivity
+          call timer_toc('ibm_calc_a_b',nvtx_gpu_stream=-1)
+        end if
         call rk_scal(rkcoeff(:,irk),n,dli,l,dzci,dzfi,grid_vol_ratio_f,s%alpha,dt,is_bound,u,v,w, &
                      s%is_forced,s%scalf,s%source,s%fluxo,s%dsdtrko,s%val,s%f,A_s,B_s, &
                      bcscal_ibm(iscal),scal_mean_grad(iscal),mask_s)
@@ -830,7 +864,7 @@ program cans
         if(is_impdiff) then
           if(is_ibm .and. is_impdiff_1d) then
             call solve_helmholtz_ibm(n,-0.5*s%alpha*dtrk,s%a,s%b,s%c,s%rhsb%x,s%rhsb%y,s%rhsb%z,is_bound, &
-                                     s%cbc,['c','c','c'],mask_s,A_s,bcscal_ibm(iscal),s%val)
+                                     s%cbc,['c','c','c'],mask_s,A_s,bcscal_ibm(iscal),.false.,s%val)
           else
             call solve_helmholtz(n,ng,hi,s%arrplan,s%normfft,-0.5*s%alpha*dtrk, &
                                  s%lambdaxy,s%a,s%b,s%c,s%rhsb%x,s%rhsb%y,s%rhsb%z,is_bound,s%cbc,['c','c','c'],s%val)
@@ -842,12 +876,15 @@ program cans
               is_forced,velf,bforce,gacc,beta,scalars,dudtrko,dvdtrko,dwdtrko,u,v,w,f,&
               A_u,A_v,A_w,B_u,B_v,B_w,mask_u,mask_v,mask_w)
       if(is_ibm) then
+        call timer_tic('ibm_bulk_forcing',nvtx_color='r',nvtx_gpu_stream=-1)
         if(is_forced(1)) call bulk_forcing_ibm(n,mask_u,A_u,f(1),u)
         if(is_forced(2)) call bulk_forcing_ibm(n,mask_v,A_v,f(2),v)
         if(is_forced(3)) call bulk_forcing_ibm(n,mask_w,A_w,f(3),w)
+        call timer_toc('ibm_bulk_forcing',nvtx_gpu_stream=-1)
       else
         call bulk_forcing(n,is_forced,f,u,v,w)
       end if
+      if(is_ibm_force) call timer_tic('ibm_force',nvtx_color='m',nvtx_gpu_stream=-1)
       if(is_ibm_force) then
         if(.not.is_impdiff_1d) then
           impart = 'post'
@@ -869,16 +906,17 @@ program cans
         call wf_scatter(impart,2,dli,dzci,grid_vol_ratio_f,mask_v,A_v,B_v,dtrk,bforce(2),p,v)
         call wf_scatter(impart,3,dli,dzci,grid_vol_ratio_c,mask_w,A_w,B_w,dtrk,bforce(3),p,w)
       end if
+      if(is_ibm_force) call timer_toc('ibm_force',nvtx_gpu_stream=-1)
       dpdl(:) = dpdl(:) + f(:)
       if(is_impdiff) then
         alpha = -.5*visc*dtrk
         if(is_ibm .and. is_impdiff_1d) then
           call solve_helmholtz_ibm(n,alpha,au,bu,cu,rhsbu%x,rhsbu%y,rhsbu%z,is_bound,cbcvel(:,:,1),['f','c','c'], &
-                                   mask_u,A_u,0._rp,u)
+                                   mask_u,A_u,0._rp,.not.is_ibm_force,u)
           call solve_helmholtz_ibm(n,alpha,av,bv,cv,rhsbv%x,rhsbv%y,rhsbv%z,is_bound,cbcvel(:,:,2),['c','f','c'], &
-                                   mask_v,A_v,0._rp,v)
+                                   mask_v,A_v,0._rp,.not.is_ibm_force,v)
           call solve_helmholtz_ibm(n,alpha,aw,bw,cw,rhsbw%x,rhsbw%y,rhsbw%z,is_bound,cbcvel(:,:,3),['c','c','f'], &
-                                   mask_w,A_w,0._rp,w)
+                                   mask_w,A_w,0._rp,.not.is_ibm_force,w)
         else
           call solve_helmholtz(n,ng,hi,arrplanu,normfftu,alpha, &
                                lambdaxyu,au,bu,cu,rhsbu%x,rhsbu%y,rhsbu%z,is_bound,cbcvel(:,:,1),['f','c','c'],u)
@@ -887,6 +925,7 @@ program cans
           call solve_helmholtz(n,ng,hi,arrplanw,normfftw,alpha, &
                                lambdaxyw,aw,bw,cw,rhsbw%x,rhsbw%y,rhsbw%z,is_bound,cbcvel(:,:,3),['c','c','f'],w)
         end if
+        if(is_ibm_force) call timer_tic('ibm_force',nvtx_color='m',nvtx_gpu_stream=-1)
         if(is_ibm_force .and. is_impdiff_1d) then
           call ibm_impulse('impl',n,lo,ng,grid_vol_ratio_f,mask_u,A_u,B_u,0._rp,u,imp_ibm(:,:,1),imp_map(:,:,1))
           call ibm_impulse('impl',n,lo,ng,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,v,imp_ibm(:,:,2),imp_map(:,:,2))
@@ -897,18 +936,21 @@ program cans
           call wf_scatter('impl',2,dli,dzci,grid_vol_ratio_f,mask_v,A_v,B_v,0._rp,0._rp,p,v)
           call wf_scatter('impl',3,dli,dzci,grid_vol_ratio_c,mask_w,A_w,B_w,0._rp,0._rp,p,w)
         end if
+        if(is_ibm_force) call timer_toc('ibm_force',nvtx_gpu_stream=-1)
       end if
-      !*******************!
-      call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
       !****//IBM\\****!
       if(is_ibm)then
-        call apply_ibm_staircase(u,mask_u,dtrk)
-        call apply_ibm_staircase(v,mask_v,dtrk)
-        call apply_ibm_staircase(w,mask_w,dtrk)
+        call timer_tic('ibm_staircase',nvtx_color='r',nvtx_gpu_stream=-1)
+        if(is_ibm_force .or. .not.is_impdiff) then ! else done in `solve_helmholtz_ibm`
+          call apply_ibm_staircase(u,mask_u,dtrk)
+          call apply_ibm_staircase(v,mask_v,dtrk)
+          call apply_ibm_staircase(w,mask_w,dtrk)
+        end if
         do nscalibm=1,nscal
           call apply_ibm_staircase_scalar(scalars(nscalibm)%val,&
               mask_s,bcscal_ibm(nscalibm))
         end do 
+        call timer_toc('ibm_staircase',nvtx_gpu_stream=-1)
       endif
       !*******************!
       call bounduvw(cbcvel,n,bcvel,nb,is_bound,.false.,dl,dzc,dzf,u,v,w)
@@ -919,6 +961,7 @@ program cans
       call boundp(cbcpre,n,bcpre,nb,is_bound,dl,dzc,pp)
       if(trim(ibm_proj) == 'damped') then
         call correc_ibm(n,dli,dzci,dtrk,pp,mask_u,mask_v,mask_w,A_u,A_v,A_w,u,v,w)
+        if(is_ibm_force) call timer_tic('ibm_force',nvtx_color='m',nvtx_gpu_stream=-1)
         if(is_ibm_force) then
           call ibm_impulse_proj(1,n,lo,ng,dli,dzci,grid_vol_ratio_f,dtrk,mask_u,A_u,pp,imp_leak(:,:,1),imp_map(:,:,1))
           call ibm_impulse_proj(2,n,lo,ng,dli,dzci,grid_vol_ratio_f,dtrk,mask_v,A_v,pp,imp_leak(:,:,2),imp_map(:,:,2))
@@ -933,6 +976,7 @@ program cans
           call wf_scatter('proj',2,dli,dzci,grid_vol_ratio_f,mask_v,A_v,B_v,dtrk,0._rp,pp,v)
           call wf_scatter('proj',3,dli,dzci,grid_vol_ratio_c,mask_w,A_w,B_w,dtrk,0._rp,pp,w)
         end if
+        if(is_ibm_force) call timer_toc('ibm_force',nvtx_gpu_stream=-1)
       else
         call correc(n,dli,dzci,dtrk,pp,u,v,w)
       end if
@@ -945,12 +989,14 @@ program cans
     dpdl(:)     = -dpdl(:)*dti
     fs(1:nscal) = fs(1:nscal)*dti
     if(is_ibm_force) then
+      call timer_tic('ibm_out',nvtx_color='m',nvtx_gpu_stream=-1)
       call MPI_ALLREDUCE(MPI_IN_PLACE,imp_ibm ,size(imp_ibm ),MPI_REAL_RP,MPI_SUM,MPI_COMM_WORLD,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,imp_leak,size(imp_leak),MPI_REAL_RP,MPI_SUM,MPI_COMM_WORLD,ierr)
       imp_ibm(:,:,:)  = imp_ibm(:,:,:)*dti
       imp_leak(:,:,:) = imp_leak(:,:,:)*dti
       !$acc update self(imp_map)
       imp_map(:,:,:)  = imp_map(:,:,:)*dti
+      call timer_toc('ibm_out',nvtx_gpu_stream=-1)
     end if
     pi_drive(:) = bforce(:) - dpdl(:) ! total driving force per unit volume in this step
 
@@ -1099,6 +1145,7 @@ program cans
     endif
     ! per-point IB wall outputs (every iout_wall steps)
     if(is_ibm_map) then
+      call timer_tic('ibm_out',nvtx_color='m',nvtx_gpu_stream=-1)
       !$acc wait
       !$acc update self(u,v,w,p)
       call calc_shear_st(fri_u,u,visc)
@@ -1140,6 +1187,7 @@ program cans
       if(ibm_direction(0,3)) &
         call out_ibm_wall_stress(trim(datadir)//'ibm_wall_stress_'//fldnum//'.out',n,lo,ng,l,dl,pi_drive,imp_map)
       !this is for the fricition calculation w/ FVM
+      call timer_toc('ibm_out',nvtx_gpu_stream=-1)
     endif
     !
     if(iout1d > 0.and.mod(istep,max(iout1d,1)) == 0) then
@@ -1218,6 +1266,7 @@ program cans
       end if
       if(myid == 0) print*, '*** Checkpoint saved at time = ', time, 'time step = ', istep, '. ***'
     end if
+    call timer_toc(trim(merge('step_ibm_out','step        ',is_ibm_force)),nvtx_gpu_stream=-1)
     if(is_timing) then
       !$acc wait(1)
       dt12 = MPI_WTIME()-dt12
