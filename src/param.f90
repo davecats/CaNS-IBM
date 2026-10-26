@@ -131,6 +131,7 @@ character(len=16), protected :: ibm_shape = 'macdonald' ! analytic wall shape: '
 real(rp), protected   :: ibm_hch = -1._rp ! reference half height for the rough-wall grid (gtype = 5)
 character(len=16), protected :: bulk_vel_def = 'superficial' ! IBM bulk velocity: 'superficial' or 'intrinsic'
 character(len=16), protected :: ibm_proj = 'none' ! IB-aware velocity correction: 'none' or 'damped'
+character(len=16), protected :: ibm_ab_form = 'exp' ! IB coefficients B(ksi): 'exp' (ksi/(exp(ksi)-1)) or 'taylor' (as AMPHIBIOUS)
 integer , protected   :: ibm_iout_wall = -1 ! interval of the per-point wall outputs (< 0: iout1d)
 !hmap
 logical,protected     :: use_hmap=.false.
@@ -209,6 +210,7 @@ contains
                             ibm_hch,          &
                             bulk_vel_def,     &
                             ibm_proj,         &
+                            ibm_ab_form,      &
                             ibm_iout_wall
     namelist /hmap/ &
                             use_hmap,         &

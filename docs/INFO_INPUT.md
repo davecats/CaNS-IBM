@@ -391,6 +391,7 @@ ibm_shape    = 'macdonald'
 ibm_hch      = -1.
 bulk_vel_def = 'superficial'
 ibm_proj     = 'none'
+ibm_ab_form  = 'exp'
 ibm_iout_wall = -1
 /
 ```
@@ -409,6 +410,10 @@ The roughness height range printed at start-up (`hmin`, `hmax`) is sampled from 
 * `'damped'`: the correction is divided by the IB coefficient `A` at the non-solid points, as the exact IB scheme integrates a pressure-gradient impulse, and the solid points are not corrected, so their velocity stays exactly zero. The velocity is then divergence free only up to a residual in the cut cells, of the same size as the divergence that `'none'` creates when it zeroes the solid points, so the divergence check does not abort on it. The fluid bulk velocity is no longer conserved by the correction; with bulk forcing it is restored at the next stage. The cost is that of `'none'`.
 
 In tests (turbulent channel over the MacDonald wall, 64^3) the two options give the same errors and temporal order (2 at the band points) to three digits; `'damped'` removes only the solid leakage. A lagged pre-compensation of the predictor with the previous pressure correction (Kim-Moin type) was tested and is unstable: the zeroing of the solid points at each stage start already acts as such a pre-compensation.
+
+`ibm_ab_form` selects how the coefficients of the second-order IB scheme (`ibm_2nd = T`) are computed from `ksi = lambda*dt*visc` at the band points, with `A = ksi + B`:
+* `'exp'` (default): `B = ksi/(exp(ksi)-1)`, the exact integral of the IB term over the RK sub-step (with a Taylor series for `ksi < 1e-3` and the `exp(-ksi)` form for `ksi > 50`).
+* `'taylor'`: `B = 1/(1+ksi/2+ksi^2/6)`, as in AMPHIBIOUS (including its lower bound `ksi >= -0.6164`, which is never active since `lambda >= 0`). It needs no `exp` and differs from `'exp'` by O(ksi^3) in `B`, so the results change at the band points (in both forms `B -> 0` for large `ksi`).
 
 `ibm_iout_wall` is the interval, in time steps, of the per-point wall outputs `fric-*`, `pressure*`, `FV-fric_*` and `ibm_wall_stress_*` below. A negative value (default) uses `iout1d`; `0` switches them off. The plane statistics `turb_stats_*` stay at `iout1d`. On fine grids the per-cell files are large (one line per cut cell), so a larger interval than `iout1d` keeps the statistics frequent without them.
 
