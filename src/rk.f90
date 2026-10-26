@@ -777,20 +777,23 @@ module mod_rk
     do k=lbound(laplacian_id,3),ubound(laplacian_id,3)
       do j=lbound(laplacian_id,2),ubound(laplacian_id,2)
         do i=lbound(laplacian_id,1),ubound(laplacian_id,1)
-          ksi_l=laplacian_id(i,j,k)*dt_visc
-          ! B = ksi/(exp(ksi)-1): Taylor series for small ksi (avoids the cancellation
-          ! in exp(ksi)-1), exp(-ksi) form for large ksi (avoids the overflow)
-          if(ksi_l<ksi_small)then
-            B_id(i,j,k)=1._rp/(1._rp+ksi_l/2._rp+&
-                              ksi_l**2/6._rp+ksi_l**3/24._rp)
-          elseif(ksi_l<=ksi_large)then
-            e_l=exp(ksi_l)-1._rp
-            B_id(i,j,k)=ksi_l/e_l
-          else
-            e_l=exp(-ksi_l)
-            B_id(i,j,k)=ksi_l*e_l/(1._rp-e_l)
+          ! away from the wall the laplacian is zero and A = B = 1, as set at initialisation
+          if(laplacian_id(i,j,k) /= 0._rp)then
+            ksi_l=laplacian_id(i,j,k)*dt_visc
+            ! B = ksi/(exp(ksi)-1): Taylor series for small ksi (avoids the cancellation
+            ! in exp(ksi)-1), exp(-ksi) form for large ksi (avoids the overflow)
+            if(ksi_l<ksi_small)then
+              B_id(i,j,k)=1._rp/(1._rp+ksi_l/2._rp+&
+                                ksi_l**2/6._rp+ksi_l**3/24._rp)
+            elseif(ksi_l<=ksi_large)then
+              e_l=exp(ksi_l)-1._rp
+              B_id(i,j,k)=ksi_l/e_l
+            else
+              e_l=exp(-ksi_l)
+              B_id(i,j,k)=ksi_l*e_l/(1._rp-e_l)
+            endif
+            A_id(i,j,k)=ksi_l+B_id(i,j,k)
           endif
-          A_id(i,j,k)=ksi_l+B_id(i,j,k)
         end do
       end do
     end do
